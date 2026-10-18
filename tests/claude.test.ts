@@ -1,5 +1,6 @@
-import type { Options, Query } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   buildClaudeEnv,
@@ -7,6 +8,10 @@ import {
   classifyKeyFormat,
   describeClaudeError,
   getClaudeConnectionStatus,
+  isAllowedClaudeModel,
+  listClaudeModels,
+  onClaudeOutcome,
+  restoreClaudeOutcome,
   parseClaudeConfig,
   resolveClaudeStatus,
   runClaude,
@@ -55,9 +60,10 @@ const successResult = (overrides: Record<string, unknown> = {}) => ({
 type Script = (signal: AbortSignal) => AsyncGenerator<unknown>
 
 function fakeQuery(script: Script) {
-  const calls: Array<{ prompt: string; options?: Options }> = []
+  type Params = { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }
+  const calls: Params[] = []
   let closed = 0
-  const queryFn = (params: { prompt: string; options?: Options }) => {
+  const queryFn = (params: Params) => {
     calls.push(params)
     const signal = params.options?.abortController?.signal ?? new AbortController().signal
     return Object.assign(script(signal), { close: () => { closed += 1 } }) as unknown as Query
@@ -339,4 +345,74 @@ test('a Claude failure in a comparison keeps the successful Copilot result', asy
   assert.equal(executions[0].response, 'Copilot yanıtı')
   assert.equal(executions[1].errorCode, 'CLAUDE_NOT_CONFIGURED')
   assert.match(executions[1].setupHint ?? '', /ANTHROPIC_API_KEY/)
+})
+
+test('model listing opens an SDK session without sending a prompt and is cached', async () => {
+  const env = { ANTHROPIC_API_KEY: 'sk-ant-api03-models' }
+  let listed = 0
+  const calls: unknown[] = []
+  const queryFn = (params: { prompt: unknown; options?: Options }) => {
+    calls.push(params)
+    return {
+      supportedModels: async () => {
+        listed += 1
+        return [
+          { value: 'default', displayName: 'Varsayılan', description: 'Önerilen' },
+          { value: 'haiku', displayName: 'Haiku', description: 'Hızlı', resolvedModel: 'claude-haiku-5-5' },
+        ]
+      },
+      close: () => undefined,
+    } as unknown as Query
+  }
+
+  const models = await listClaudeModels({ env, queryFn })
+  assert.deepEqual(models.map((item) => item.value), ['default', 'haiku'])
+  assert.equal(typeof (calls[0] as { prompt: unknown }).prompt, 'object')
+  await listClaudeModels({ env, queryFn })
+  assert.equal(listed, 1)
+
+  assert.equal(isAllowedClaudeModel('haiku', env), true)
+  assert.equal(isAllowedClaudeModel('claude-haiku-5-5', env), true)
+  assert.equal(isAllowedClaudeModel('opus', env), false)
+  assert.equal(isAllowedClaudeModel('bad model', env), false)
+  await assert.rejects(listClaudeModels({ env: {}, queryFn }), isCode('CLAUDE_NOT_CONFIGURED'))
+})
+
+test('a per-request model overrides the configured default', async () => {
+  const fake = fakeQuery(async function* () {
+    yield init()
+    yield successResult()
+  })
+  const env = { ANTHROPIC_API_KEY: 'sk-ant-api03-per-request', CLAUDE_AGENT_MODEL: 'opus' }
+  const result = await runClaude('x', 'c-12', { env, queryFn: fake.queryFn, model: 'haiku' })
+  assert.equal(fake.calls[0].options?.model, 'haiku')
+  assert.equal(result.requestedModel, 'haiku')
+
+  await runClaude('x', 'c-13', { env, queryFn: fake.queryFn, model: 'default' })
+  assert.equal(fake.calls[1].options?.model, undefined)
+})
+
+test('a stored verification is restored after restart and new outcomes are reported', async () => {
+  const key = 'sk-ant-api03-restored'
+  const fingerprint = createHash('sha256').update(key).digest('hex').slice(0, 16)
+  restoreClaudeOutcome({ keyFingerprint: fingerprint, ok: true, at: '2026-10-18T10:00:00.000Z' })
+  const restored = await getClaudeConnectionStatus({ ANTHROPIC_API_KEY: key })
+  assert.equal(restored.state, 'verified')
+  assert.equal(restored.lastVerifiedAt, '2026-10-18T10:00:00.000Z')
+
+  // Bilinmeyen hata kodlu başarısız kayıt yok sayılır.
+  restoreClaudeOutcome({ keyFingerprint: fingerprint, ok: false, code: 'NOT_A_CODE', at: 'x' })
+  assert.equal((await getClaudeConnectionStatus({ ANTHROPIC_API_KEY: key })).state, 'verified')
+
+  const saved: unknown[] = []
+  onClaudeOutcome((outcome) => saved.push(outcome))
+  const fake = fakeQuery(async function* () {
+    yield init()
+    yield successResult()
+  })
+  await runClaude('x', 'c-14', { env: { ANTHROPIC_API_KEY: key }, queryFn: fake.queryFn })
+  onClaudeOutcome(undefined)
+  assert.equal(saved.length, 1)
+  assert.equal((saved[0] as { keyFingerprint: string; ok: boolean }).keyFingerprint, fingerprint)
+  assert.doesNotMatch(JSON.stringify(saved), /sk-ant-api03-restored/)
 })

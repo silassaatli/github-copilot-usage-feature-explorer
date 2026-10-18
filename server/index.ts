@@ -5,7 +5,17 @@ import express from 'express'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getRecommendation } from './services/advisor.js'
-import { describeClaudeError, getClaudeConnectionStatus, runClaude } from './services/claude.js'
+import {
+  describeClaudeError,
+  getClaudeConnectionStatus,
+  isAllowedClaudeModel,
+  listClaudeModels,
+  onClaudeOutcome,
+  restoreClaudeOutcome,
+  runClaude,
+} from './services/claude.js'
+import { openDatabase, type AppDatabase } from './db/database.js'
+import { createVerificationRepository } from './db/provider-verifications.js'
 import {
   closeCopilotSession,
   createCopilotConnection,
@@ -22,7 +32,14 @@ import {
 } from './services/copilot-runtime.js'
 import { calculateLicense } from './services/licensing.js'
 import { filterSelectableModels, getSelectableAutoTiers } from './services/model-catalog.js'
-import { addExecution, addProviderExecution, getHistory } from './services/usage-history.js'
+import {
+  addExecution,
+  addProviderExecution,
+  createSqliteHistoryStore,
+  getHistory,
+  getHistoryStore,
+  setHistoryStore,
+} from './services/usage-history.js'
 import {
   createComparisonSummary,
   normalizeCopilotExecution,
@@ -41,6 +58,10 @@ const promptLimit = 12_000
 const nanoAiuPerAiCredit = 1_000_000_000
 const copilotRequestTimeoutMs = parseTimeoutMs(process.env.COPILOT_REQUEST_TIMEOUT_MS, 120_000)
 const claudeRequestTimeoutMs = parseTimeoutMs(process.env.CLAUDE_REQUEST_TIMEOUT_MS, 120_000)
+const databasePath = process.env.DATABASE_PATH?.trim() || join(process.cwd(), 'data', 'explorer.sqlite')
+const historyRetention = parseRetention(process.env.HISTORY_RETENTION)
+let database: AppDatabase | undefined
+let databaseError: string | undefined
 type AccountModel = Awaited<ReturnType<typeof copilotClient.rpc.models.list>>['models'][number]
 
 app.use(express.json({ limit: '64kb' }))
@@ -58,6 +79,7 @@ app.get('/api/health', async (_request, response) => {
       // Anahtarın kendisi hiçbir zaman yanıta eklenmez; "verified" yalnızca
       // aynı anahtarla başarılı bir gerçek çalıştırmadan sonra true olur.
       claude,
+      database: getDatabaseHealth(),
     },
   })
 })
@@ -134,18 +156,47 @@ app.get('/api/copilot/quota', async (_request, response) => {
   }
 })
 
-app.get('/api/usage/history', (_request, response) => {
-  response.json({ executions: getHistory() })
+app.get('/api/usage/history', (request, response) => {
+  const limit = Number(request.query.limit)
+  const provider = request.query.provider
+  response.json({
+    storage: getHistoryStore().kind,
+    executions: getHistory({
+      ...(Number.isInteger(limit) ? { limit } : {}),
+      ...(provider === 'github-copilot' || provider === 'claude' ? { provider } : {}),
+    }),
+  })
 })
 
 app.get('/api/claude/status', async (_request, response) => {
   response.json(await getClaudeConnectionStatus())
 })
 
+app.get('/api/claude/models', async (request, response) => {
+  try {
+    const models = await listClaudeModels({ refresh: request.query.refresh === '1' })
+    response.json({ status: 'available', models })
+  } catch (error) {
+    const described = describeClaude(error)
+    response.status(described.status).json({
+      status: 'unavailable',
+      models: [],
+      error: described.message,
+      code: described.code,
+      ...(described.setupHint ? { setupHint: described.setupHint } : {}),
+    })
+  }
+})
+
 app.post('/api/claude/chat', async (request, response) => {
-  const parsed = parseRunRequest({ ...request.body, model: 'auto', strategy: 'normal' })
+  const parsed = parseRunRequest({ ...request.body, model: 'auto', autoTier: undefined, strategy: 'normal' })
   if (!parsed.ok) {
     response.status(400).json({ error: parsed.error })
+    return
+  }
+  const claudeModel = parseClaudeModel(isRecord(request.body) ? request.body.claudeModel : undefined)
+  if (!claudeModel.ok) {
+    response.status(400).json({ error: claudeModel.error })
     return
   }
   const comparisonId = randomUUID()
@@ -153,11 +204,21 @@ app.post('/api/claude/chat', async (request, response) => {
     const result = await runClaude(parsed.value.prompt, comparisonId, {
       signal: createRequestSignal(response),
       timeoutMs: claudeRequestTimeoutMs,
+      model: claudeModel.model,
     })
-    addClaudeHistory(result, parsed.value.prompt)
+    recordProviderHistory(result, parsed.value.prompt, { strategy: 'normal', requestedModel: claudeModel.model })
     response.json(result)
   } catch (error) {
     const described = describeClaude(error)
+    recordProviderHistory({
+      id: randomUUID(),
+      comparisonId,
+      provider: 'claude',
+      runtime: 'Claude Agent SDK',
+      events: [],
+      error: described.message,
+      errorCode: described.code,
+    }, parsed.value.prompt, { strategy: 'normal', requestedModel: claudeModel.model })
     if (response.headersSent || response.destroyed) return
     response.status(described.status).json({
       error: described.message,
@@ -182,11 +243,15 @@ app.post('/api/compare', async (request, response) => {
   }
   const parsed = parseRunRequest({
     ...request.body,
-    model: 'auto',
     strategy: request.body.strategy ?? 'normal',
   })
   if (!parsed.ok) {
     response.status(400).json({ error: parsed.error })
+    return
+  }
+  const claudeModel = parseClaudeModel(request.body.claudeModel)
+  if (!claudeModel.ok) {
+    response.status(400).json({ error: claudeModel.error })
     return
   }
 
@@ -204,6 +269,7 @@ app.post('/api/compare', async (request, response) => {
       return runClaude(parsed.value.prompt, comparisonId, {
         signal,
         timeoutMs: claudeRequestTimeoutMs,
+        model: claudeModel.model,
       })
     },
   }, (provider, error) => {
@@ -223,28 +289,12 @@ app.post('/api/compare', async (request, response) => {
   })
 
   for (const execution of executions) {
-    if (execution.provider === 'claude' && !execution.error) {
-      addClaudeHistory(execution, parsed.value.prompt)
-    } else if (execution.error) {
-      addProviderExecution({
-        id: execution.id,
-        label: parsed.value.prompt.replace(/\s+/g, ' ').slice(0, 80),
-        comparisonId,
-        provider: execution.provider,
-        actualModel: execution.actualModel,
-        inputTokens: execution.inputTokens,
-        outputTokens: execution.outputTokens,
-        cachedTokens: execution.cachedTokens,
-        reasoningTokens: execution.reasoningTokens,
-        durationMs: execution.durationMs,
-        modelCalls: execution.modelCalls,
-        toolCalls: execution.toolCalls,
-        providerCost: execution.providerCost,
-        providerCostUnit: execution.providerCostUnit,
-        error: execution.error,
-        events: execution.events,
-      })
-    }
+    // Başarılı Copilot çalıştırmaları runCopilot içinde ayrıntılı olarak kaydedilir.
+    if (execution.provider === 'github-copilot' && !execution.error) continue
+    recordProviderHistory(execution, parsed.value.prompt, {
+      strategy: execution.provider === 'github-copilot' ? parsed.value.strategy : 'normal',
+      requestedModel: execution.provider === 'github-copilot' ? parsed.value.model : claudeModel.model,
+    })
   }
 
   response.json({
@@ -378,6 +428,14 @@ function createRequestSignal(response: express.Response): AbortSignal {
     if (!response.writableFinished) controller.abort()
   })
   return controller.signal
+}
+
+function parseClaudeModel(value: unknown): { ok: true; model?: string } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === '') return { ok: true }
+  if (typeof value !== 'string' || !isAllowedClaudeModel(value.trim())) {
+    return { ok: false, error: 'Claude model seçimi geçersiz veya bu hesapta kullanılamıyor.' }
+  }
+  return { ok: true, model: value.trim() }
 }
 
 /** Claude hatasını güvenli koda çevirir; sunucu günlüğüne yalnızca kod ve hata adı yazılır. */
@@ -835,22 +893,34 @@ async function runCopilot(input: RunRequest, signal?: AbortSignal) {
   }
 }
 
-function addClaudeHistory(execution: ProviderExecution, prompt: string) {
+/** Sağlayıcı sonucunu geçmişe yazar; tam istem ve yanıt saklanmaz, yalnızca kısa etiket. */
+function recordProviderHistory(
+  execution: ProviderExecution,
+  prompt: string,
+  context: { strategy: string; requestedModel?: string },
+) {
   addProviderExecution({
     id: execution.id,
     label: prompt.replace(/\s+/g, ' ').slice(0, 80),
     comparisonId: execution.comparisonId,
     provider: execution.provider,
+    strategy: context.strategy,
+    requestedModel: execution.requestedModel ?? context.requestedModel,
     actualModel: execution.actualModel,
     inputTokens: execution.inputTokens,
     outputTokens: execution.outputTokens,
     cachedTokens: execution.cachedTokens,
+    cacheCreationTokens: execution.cacheCreationTokens,
     reasoningTokens: execution.reasoningTokens,
     durationMs: execution.durationMs,
+    numTurns: execution.numTurns,
     modelCalls: execution.modelCalls,
     toolCalls: execution.toolCalls,
     providerCost: execution.providerCost,
     providerCostUnit: execution.providerCostUnit,
+    providerCostSource: execution.providerCostSource,
+    error: execution.error,
+    errorCode: execution.errorCode,
     events: execution.events,
   })
 }
@@ -909,7 +979,68 @@ function stopCopilot() {
   })
 }
 
+function parseRetention(value: string | undefined) {
+  const parsed = Number(value)
+  if (!value?.trim() || !Number.isInteger(parsed)) return 1_000
+  return Math.min(Math.max(parsed, 10), 100_000)
+}
+
+/**
+ * SQLite'ı açar ve geçmiş ile Claude doğrulama durumunu ona bağlar. Açılamazsa
+ * uygulama bellek deposuyla çalışmaya devam eder.
+ */
+function initDatabase() {
+  try {
+    database = openDatabase(databasePath)
+    setHistoryStore(createSqliteHistoryStore(database.db, { retention: historyRetention }))
+    const verifications = createVerificationRepository(database.db)
+    restoreClaudeOutcome(verifications.load('claude'))
+    onClaudeOutcome((outcome) => verifications.save('claude', outcome))
+    console.log(`SQLite veritabanı hazır (şema v${database.schemaVersion}): ${database.location}`)
+  } catch (error) {
+    databaseError = error instanceof Error ? error.message : String(error)
+    console.error('SQLite veritabanı açılamadı; geçmiş yalnızca bellekte tutulacak:', databaseError)
+  }
+}
+
+function getDatabaseHealth() {
+  if (!database) {
+    return {
+      state: 'unavailable',
+      storage: getHistoryStore().kind,
+      message: 'Veritabanı açılamadı; geçmiş yalnızca bellekte tutuluyor ve yeniden başlatmada kaybolur.',
+    }
+  }
+  let executions: number | undefined
+  try {
+    executions = getHistoryStore().count()
+  } catch {
+    executions = undefined
+  }
+  return {
+    state: 'ready',
+    storage: getHistoryStore().kind,
+    engine: 'sqlite',
+    sqliteVersion: database.sqliteVersion,
+    schemaVersion: database.schemaVersion,
+    executions,
+    retention: historyRetention,
+    message: 'Kullanım geçmişi SQLite veritabanında kalıcı olarak tutuluyor.',
+  }
+}
+
+function closeDatabase() {
+  if (!database) return
+  try {
+    database.db.close()
+  } catch (error) {
+    console.error('Veritabanı kapatılamadı:', error instanceof Error ? error.message : error)
+  }
+  database = undefined
+}
+
 function startServer() {
+  initDatabase()
   const server = app.listen(port, '127.0.0.1', (error?: Error) => {
     if (error) {
       console.error('API sunucusu başlatılamadı:', error)
@@ -935,6 +1066,7 @@ function startServer() {
         console.error('API sunucusu kapatılamadı:', error)
         process.exitCode = 1
       }
+      closeDatabase()
       void stopCopilot()
     })
   }

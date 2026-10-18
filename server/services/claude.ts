@@ -1,4 +1,4 @@
-import type { EffortLevel, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { EffortLevel, Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -445,10 +445,39 @@ export function parseClaudeConfig(source: NodeJS.ProcessEnv): ClaudeConfig {
   }
 }
 
-type QueryFn = (params: { prompt: string; options?: Options }) => Query
+type QueryFn = (params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => Query
 
 let sdkAvailability: Promise<boolean> | undefined
 let lastOutcome: ClaudeRunOutcome | undefined
+let outcomeListener: ((outcome: ClaudeRunOutcome) => void) | undefined
+
+/** Kalıcı depodan son doğrulama sonucunu geri yükler (ör. sunucu yeniden başladığında). */
+export function restoreClaudeOutcome(
+  outcome: { keyFingerprint: string; ok: boolean; code?: string; at: string } | undefined,
+) {
+  if (!outcome) {
+    lastOutcome = undefined
+    return
+  }
+  const code = outcome.code && outcome.code in errorCatalog ? (outcome.code as ClaudeErrorCode) : undefined
+  // Bilinmeyen bir hata kodu taşıyan başarısız kayıt yok sayılır.
+  if (!outcome.ok && !code) return
+  lastOutcome = { keyFingerprint: outcome.keyFingerprint, ok: outcome.ok, at: outcome.at, ...(code ? { code } : {}) }
+}
+
+/** Her gerçek çalıştırma sonucunda çağrılır; kalıcı depoya yazmak için. */
+export function onClaudeOutcome(listener: ((outcome: ClaudeRunOutcome) => void) | undefined) {
+  outcomeListener = listener
+}
+
+function setOutcome(outcome: ClaudeRunOutcome) {
+  lastOutcome = outcome
+  try {
+    outcomeListener?.(outcome)
+  } catch (error) {
+    console.error('Claude doğrulama durumu kaydedilemedi:', error instanceof Error ? error.message : error)
+  }
+}
 
 async function loadQuery(): Promise<QueryFn> {
   try {
@@ -471,10 +500,110 @@ export async function getClaudeConnectionStatus(
   })
 }
 
+export interface ClaudeModelOption {
+  value: string
+  displayName: string
+  description: string
+  resolvedModel?: string
+}
+
+const modelCacheTtlMs = 10 * 60_000
+let modelCache: { keyFingerprint: string; at: number; models: ClaudeModelOption[] } | undefined
+
+// Hiçbir zaman mesaj üretmeyen istem: SDK oturumu açılır ama modele istek gitmez.
+function idlePrompt(signal: AbortSignal): AsyncIterable<SDKUserMessage> {
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+        signal.addEventListener('abort', () => resolve({ done: true, value: undefined }), { once: true })
+      }),
+    }),
+  }
+}
+
+/**
+ * Kurulu Claude Code CLI'nin bu anahtarla kabul ettiği modelleri döndürür.
+ * Kullanıcı mesajı gönderilmediği için model çağrısı ve token kullanımı oluşmaz.
+ */
+export async function listClaudeModels({
+  env = process.env,
+  queryFn,
+  timeoutMs = 20_000,
+  refresh = false,
+}: { env?: NodeJS.ProcessEnv; queryFn?: QueryFn; timeoutMs?: number; refresh?: boolean } = {}): Promise<ClaudeModelOption[]> {
+  const apiKey = env.ANTHROPIC_API_KEY?.trim()
+  if (!apiKey) throw new ClaudeRunError('CLAUDE_NOT_CONFIGURED')
+  const keyFormat = classifyKeyFormat(apiKey)
+  if (keyFormat === 'oauth' || keyFormat === 'admin') {
+    throw new ClaudeRunError('CLAUDE_INVALID_KEY_FORMAT')
+  }
+  const fingerprint = keyFingerprint(apiKey)
+  if (
+    !refresh &&
+    modelCache?.keyFingerprint === fingerprint &&
+    Date.now() - modelCache.at < modelCacheTtlMs
+  ) {
+    return modelCache.models
+  }
+
+  const query = queryFn ?? await loadQuery()
+  if (!queryFn) await mkdir(claudeConfigDir, { recursive: true })
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const session = query({
+    prompt: idlePrompt(controller.signal),
+    options: {
+      abortController: controller,
+      tools: [],
+      settingSources: [],
+      permissionMode: 'dontAsk',
+      permissionPrompts: 'none',
+      maxTurns: 1,
+      persistSession: false,
+      cwd: tmpdir(),
+      env: buildClaudeEnv(env, apiKey),
+    },
+  })
+  try {
+    const models = (await session.supportedModels()).map((model) => ({
+      value: model.value,
+      displayName: model.displayName,
+      description: model.description,
+      ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+    }))
+    modelCache = { keyFingerprint: fingerprint, at: Date.now(), models }
+    return models
+  } catch {
+    throw new ClaudeRunError(timedOut ? 'CLAUDE_TIMEOUT' : 'CLAUDE_REQUEST_FAILED')
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    try {
+      session.close()
+    } catch {
+      // Oturum zaten kapanmışsa yapılacak bir şey yok.
+    }
+  }
+}
+
+/** Seçilen modelin biçimini ve (liste önbellekteyse) listede olup olmadığını doğrular. */
+export function isAllowedClaudeModel(model: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!/^[A-Za-z0-9._:[\]-]{1,100}$/.test(model)) return false
+  const apiKey = env.ANTHROPIC_API_KEY?.trim()
+  const cached = apiKey && modelCache?.keyFingerprint === keyFingerprint(apiKey) ? modelCache.models : undefined
+  return !cached || cached.some((item) => item.value === model || item.resolvedModel === model)
+}
+
 export interface RunClaudeOptions {
   signal?: AbortSignal
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
+  /** İstek bazında seçilen model; verilmezse CLAUDE_AGENT_MODEL veya SDK varsayılanı. */
+  model?: string
   /** Testlerde SDK yerine sahte bir sorgu işlevi kullanmak için. */
   queryFn?: QueryFn
 }
@@ -482,7 +611,7 @@ export interface RunClaudeOptions {
 export async function runClaude(
   prompt: string,
   comparisonId: string,
-  { signal, timeoutMs = 120_000, env = process.env, queryFn }: RunClaudeOptions = {},
+  { signal, timeoutMs = 120_000, env = process.env, model, queryFn }: RunClaudeOptions = {},
 ): Promise<ProviderExecution> {
   const apiKey = env.ANTHROPIC_API_KEY?.trim()
   if (!apiKey) throw new ClaudeRunError('CLAUDE_NOT_CONFIGURED')
@@ -498,6 +627,8 @@ export async function runClaude(
   if (signal?.aborted) throw new ClaudeRunError('REQUEST_CANCELLED')
 
   const config = parseClaudeConfig(env)
+  if (model && model !== 'default') config.model = model
+  else if (model === 'default') delete config.model
   const fingerprint = keyFingerprint(apiKey)
   const controller = new AbortController()
   let interruption: 'CLAUDE_TIMEOUT' | 'REQUEST_CANCELLED' | 'CLAUDE_CREDENTIAL_SOURCE' | undefined
@@ -551,7 +682,7 @@ export async function runClaude(
   if (interruption) throw new ClaudeRunError(interruption)
   const failure = classifyClaudeRun(run)
   if (failure) throw recordFailure(fingerprint, failure)
-  lastOutcome = { keyFingerprint: fingerprint, ok: true, at: new Date().toISOString() }
+  setOutcome({ keyFingerprint: fingerprint, ok: true, at: new Date().toISOString() })
 
   const usageRows = Object.values(run.modelUsage)
   const sum = (select: (item: ClaudeModelUsage) => number | undefined) => {
@@ -596,6 +727,6 @@ export async function runClaude(
 }
 
 function recordFailure(fingerprint: string, code: ClaudeErrorCode) {
-  lastOutcome = { keyFingerprint: fingerprint, ok: false, code, at: new Date().toISOString() }
+  setOutcome({ keyFingerprint: fingerprint, ok: false, code, at: new Date().toISOString() })
   return new ClaudeRunError(code)
 }

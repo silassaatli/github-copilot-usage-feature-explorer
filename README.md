@@ -19,7 +19,7 @@ Express API
 
 ## Gereksinimler
 
-- Node.js `^20.19.0` veya `>=22.12.0`
+- Node.js `>=22.13.0` (yerleşik `node:sqlite` modülü için; Node 24 önerilir)
 - npm
 - GitHub Copilot CLI kurulumu ve mevcut GitHub hesabıyla oturum açılmış olması
 - Copilot planı/model kataloğu ve ilgili özellikler için hesap erişimi
@@ -86,7 +86,9 @@ npm run test:copilot-sdk
 ### Oyun alanı
 
 - Ortak görev tek `/api/compare` isteğiyle seçilen sağlayıcılara ayrı ayrı gönderilir. İki sağlayıcı çalıştırılmadan önce açık kullanıcı onayı gerekir; sağlayıcı hataları birbirinden bağımsız yakalanır.
-- Copilot model kataloğu sunucuda tutulur; Playground'da anlamsız tek seçenekli model menüsü yoktur. Copilot isteği `auto` kipini kullanır, SDK'nın gerçek model ölçümü sonuçta gösterilir.
+- Copilot ve Claude modelleri Oyun Alanı'nda ayrı ayrı seçilir. Copilot listesi hesabın model kataloğundan (`/api/copilot/models`) gelir; politika nedeniyle kapalı modeller seçilemez, çarpan bilgisi varsa gösterilir. Katalog yalnızca `auto` döndürüyorsa (bazı planlarda olduğu gibi) yalnızca Otomatik seçeneği görünür. Otomatik yönlendirme profilleri hesap sunuyorsa ayrıca seçilebilir.
+- Claude listesi kurulu Agent SDK/CLI'den (`/api/claude/models`, `supportedModels()`) gelir: takma adlar (`opus`, `sonnet`, `haiku`, `fable`) ve çözümlendikleri gerçek model kimlikleri. Liste alınırken modele mesaj gönderilmez; sonuç 10 dakika önbellekte tutulur. Seçim yapılmazsa `CLAUDE_AGENT_MODEL` veya SDK varsayılanı kullanılır.
+- Karşılaştırma Laboratuvarı aynı Copilot model seçimini kullanır.
 - Claude modeli sunucu tarafında `CLAUDE_AGENT_MODEL` ile seçilir; tanımlı değilse SDK/CLI varsayılanı kullanılır. Kartta istenen model ve SDK'nın `modelUsage` ile bildirdiği gerçek model ayrı gösterilir.
 - Claude ölçümleri yalnızca SDK bildirdiğinde gösterilir: tokenlar (`modelUsage`, yoksa `usage`), tur sayısı (`num_turns`), model çağrısı (benzersiz asistan mesajı), araç çağrısı ve `total_cost_usd` tahmini. Bildirilmeyen alan "Kullanılamıyor" olarak kalır.
 - Claude çalıştırması `tools: []`, `permissionMode: 'dontAsk'`, boş ayar kaynakları, kalıcı olmayan oturum ve sistem geçici diziniyle sınırlandırılır; proje dosyalarına, shell'e, MCP'ye veya Skills'e araç erişimi verilmez.
@@ -103,7 +105,7 @@ npm run test:copilot-sdk
 - `session.usage_info` bağlam tokenlarını ve token sınırını bildirir.
 - `session.rpc.usage.getMetrics()` oturum toplamlarını ve model kırılımını sağlar.
 - `totalNanoAiu`, SDK'nın nano-AIU ölçeğinden AI Credit'e `1.000.000.000` böleniyle çevrilir. Dönüştürme değeri SDK runtime'ının kullandığı AIU ölçeğiyle uyumludur.
-- Kullanım geçmişi bellekte en fazla 30 çalıştırma tutar. Tam istek ve Copilot yanıtı history endpoint'inde saklanıp sunulmaz; en fazla 80 karakterlik görev etiketi ve ölçüm özeti tutulur.
+- Kullanım geçmişi yerel SQLite veritabanında kalıcı olarak tutulur (bkz. Veritabanı). Tam istek ve yanıt saklanmaz; en fazla 80 karakterlik görev etiketi ve ölçüm özeti tutulur. Başarısız çalıştırmalar hata koduyla birlikte kaydedilir.
 - Geçmiş sağlayıcıyı ve iki çalıştırmayı aynı karşılaştırma ID'siyle ilişkilendirir; Claude geçmişine prompt veya yanıt yazılmaz.
 - Kota `client.rpc.account.getQuota({})` üzerinden istenir. Bu SDK RPC'si deneysel; desteklenmeyen hesap/runtime için kullanılabilir değil durumu gösterilir.
 - Premium request alanları varsa yalnızca eski uyumluluk tanısı olarak ele alınır; güncel faturalandırma hesabında kullanılmaz.
@@ -136,17 +138,37 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 | Yöntem | Uç nokta | Açıklama |
 |---|---|---|
 | GET | `/api/health` | API, Copilot (başlatılıyor/hazır/kullanılamıyor, CLI sürümü, oturum açma durumu) ve Claude yapılandırma durumu |
-| GET | `/api/copilot/models` | Runtime model kataloğu ve SDK metadata |
+| GET | `/api/copilot/models` | Copilot hesap/oturum model kataloğu ve Otomatik yönlendirme profilleri |
+| GET | `/api/claude/models` | Claude Agent SDK'nın kabul ettiği modeller (`?refresh=1` önbelleği yeniler); model çağrısı yapmaz |
 | POST | `/api/copilot/chat` | Yeni oturumda Copilot isteği ve ölçümler |
 | POST | `/api/copilot/fleet` | Deneysel Fleet RPC; destek yoksa açıklayıcı hata |
 | GET | `/api/claude/status` | Kimlik bilgisi değerini açığa çıkarmadan Claude durumu (yapılandırıldı / doğrulandı ayrımıyla) |
 | POST | `/api/claude/chat` | Araç erişimi kapalı Claude Agent SDK çalıştırması; hatalar `{ error, code, setupHint }` |
 | POST | `/api/compare` | Sağlayıcı çalıştırmaları, bağımsız hata sonuçları ve ortak metrik özeti |
 | GET | `/api/copilot/quota` | Deneysel hesap kota RPC'si |
-| GET | `/api/usage/history` | Bellekteki en fazla 30 ölçüm özeti |
+| GET | `/api/usage/history` | Kalıcı ölçüm geçmişi; `?limit=` (varsayılan 30, en fazla 200) ve `?provider=github-copilot\|claude`; yanıt `storage: sqlite\|memory` içerir |
 | POST | `/api/advisor/recommend` | Ücretsiz kural tabanlı mod önerisi |
 | GET | `/api/licensing/plans` | Merkezi plan fiyatları/tahsisatları ve kaynak metadata |
 | POST | `/api/licensing/calculate` | Koltuk, dahil kredi ve ek kullanım hesabı |
+
+## Veritabanı
+
+Kullanım geçmişi ve Claude bağlantı doğrulama durumu Node'un yerleşik `node:sqlite` modülüyle (ek bağımlılık yok) yerel bir SQLite dosyasında tutulur. Node 24'te bu modül deneysel olarak işaretlidir ve başlangıçta bir `ExperimentalWarning` yazdırır; veritabanı erişimi `server/db/` altında toplandığı için gerekirse başka bir sürücüye geçilebilir.
+
+| Değişken | Varsayılan | Açıklama |
+|---|---|---|
+| `DATABASE_PATH` | `data/explorer.sqlite` | Veritabanı dosyası. Klasör yoksa oluşturulur. `data/` ve `*.sqlite*` Git tarafından yok sayılır. |
+| `HISTORY_RETENTION` | `1000` | Saklanacak en fazla çalıştırma sayısı (10–100000). Eskiler ve bağlı kayıtları silinir. |
+
+| Tablo | İçerik |
+|---|---|
+| `executions` | Her sağlayıcı çalıştırması: sağlayıcı, strateji, durum/hata kodu, istenen ve gerçek model, token, süre, tur/model/araç çağrısı, maliyet ve birimi (AI Credit veya USD ayrı), bağlam kullanımı, 80 karakterlik etiket. Tam istem ve yanıt sütunu yoktur. |
+| `model_usage` | Copilot'un model başına kırılımı (istek, token, nano-AIU). |
+| `execution_events` | Ajan, araç, skill ve alt ajan zaman çizelgesi. |
+| `provider_verifications` | Claude için son gerçek çalıştırma sonucu ve anahtarın kısaltılmış SHA-256 özeti; anahtarın kendisi saklanmaz. Sunucu yeniden başladığında "doğrulandı" durumu korunur, anahtar değişirse geçersiz sayılır. |
+| `schema_migrations` | Uygulanan şema sürümleri. Geçişler başlangıçta işlem (transaction) içinde otomatik çalışır. |
+
+Veritabanı açılamazsa sunucu kapanmaz: geçmiş bellekte tutulur, `/api/health` → `services.database.state` değeri `unavailable` olur ve arayüz bunu belirtir. Veritabanını sıfırlamak için sunucuyu durdurup `data/` klasörünü silmeniz yeterlidir.
 
 ## Copilot oturum güvenliği ve hata yönetimi
 

@@ -147,6 +147,7 @@ interface UsageHistoryRecord {
     providerCostUnit?: 'AI Credit' | 'USD'
   }
   error?: string
+  errorCode?: string
   events: Execution['events']
 }
 
@@ -154,6 +155,20 @@ interface ComparisonRow {
   strategy: Strategy
   execution?: Execution
   error?: string
+}
+
+interface CopilotModelOption {
+  id: string
+  name: string
+  policy?: { state?: string }
+  billing?: { multiplier?: number }
+}
+
+interface ClaudeModelOption {
+  value: string
+  displayName: string
+  description: string
+  resolvedModel?: string
 }
 
 interface LicensePlan {
@@ -291,9 +306,18 @@ function App() {
     runnable: false,
     message: 'Bağlantı durumu denetleniyor.',
   })
+  const [copilotModels, setCopilotModels] = useState<CopilotModelOption[]>([])
+  const [copilotAutoTiers, setCopilotAutoTiers] = useState<Array<{ id: string; label: string }>>([])
+  const [copilotModel, setCopilotModel] = useState('auto')
+  const [copilotAutoTier, setCopilotAutoTier] = useState('')
+  const [copilotModelsNote, setCopilotModelsNote] = useState('')
+  const [claudeModels, setClaudeModels] = useState<ClaudeModelOption[]>([])
+  const [claudeModel, setClaudeModel] = useState('')
+  const [claudeModelsNote, setClaudeModelsNote] = useState('')
   const [history, setHistory] = useState<UsageHistoryRecord[]>([])
   const [historyProvider, setHistoryProvider] = useState<'all' | ProviderId>('all')
   const [historyError, setHistoryError] = useState('')
+  const [historyStorage, setHistoryStorage] = useState<'sqlite' | 'memory' | ''>('')
   const [quota, setQuota] = useState<Record<string, unknown>>()
   const [quotaStatus, setQuotaStatus] = useState('')
   const [advisorTask, setAdvisorTask] = useState('')
@@ -315,7 +339,10 @@ function App() {
   const [licenseError, setLicenseError] = useState('')
 
   useEffect(() => {
-    void refreshClaudeStatus()
+    void refreshClaudeStatus().then((status) => {
+      if (status?.runnable) void loadClaudeModels()
+    })
+    void loadCopilotModels()
     void requestJson('/api/licensing/plans')
       .then((payload) => {
         if (isRecord(payload) && Array.isArray(payload.plans)) {
@@ -331,7 +358,49 @@ function App() {
     void refreshHistory()
   }, [])
 
-  async function refreshClaudeStatus() {
+  async function loadCopilotModels() {
+    try {
+      const payload = await requestJson('/api/copilot/models')
+      if (!isRecord(payload) || !Array.isArray(payload.models)) throw new Error('Copilot model kataloğu alınamadı.')
+      const models = payload.models.filter(
+        (item): item is CopilotModelOption =>
+          isRecord(item) && typeof item.id === 'string' && typeof item.name === 'string' && item.id !== 'auto',
+      )
+      setCopilotModels(models)
+      setCopilotAutoTiers(Array.isArray(payload.autoTiers)
+        ? payload.autoTiers.filter((item): item is { id: string; label: string } =>
+            isRecord(item) && typeof item.id === 'string' && typeof item.label === 'string')
+        : [])
+      setCopilotModelsNote(typeof payload.message === 'string' ? payload.message : '')
+    } catch (caught) {
+      setCopilotModels([])
+      setCopilotModelsNote(caught instanceof Error ? caught.message : 'Copilot model kataloğu alınamadı.')
+    }
+  }
+
+  async function loadClaudeModels() {
+    try {
+      const payload = await requestJson('/api/claude/models')
+      if (!isRecord(payload) || !Array.isArray(payload.models)) throw new Error('Claude model listesi alınamadı.')
+      setClaudeModels(payload.models.filter(
+        (item): item is ClaudeModelOption =>
+          isRecord(item) && typeof item.value === 'string' && typeof item.displayName === 'string',
+      ))
+      setClaudeModelsNote('')
+    } catch (caught) {
+      setClaudeModels([])
+      setClaudeModelsNote(caught instanceof Error ? caught.message : 'Claude model listesi alınamadı.')
+    }
+  }
+
+  function copilotModelPayload() {
+    return {
+      model: copilotModel,
+      ...(copilotModel === 'auto' && copilotAutoTier ? { autoTier: copilotAutoTier } : {}),
+    }
+  }
+
+  async function refreshClaudeStatus(): Promise<ClaudeStatus | undefined> {
     try {
       const payload = await requestJson('/api/claude/status')
       if (
@@ -343,7 +412,7 @@ function App() {
       }
       const state = claudeStatusStates.find((item) => item === payload.state)
       if (!state) throw new Error('Claude bağlantı durumu alınamadı.')
-      setClaudeStatus({
+      const next: ClaudeStatus = {
         state,
         configured: payload.configured,
         verified: payload.verified === true,
@@ -352,7 +421,9 @@ function App() {
         ...(typeof payload.setupHint === 'string' ? { setupHint: payload.setupHint } : {}),
         ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
         ...(typeof payload.lastVerifiedAt === 'string' ? { lastVerifiedAt: payload.lastVerifiedAt } : {}),
-      })
+      }
+      setClaudeStatus(next)
+      return next
     } catch {
       setClaudeStatus({
         state: 'sdk_unavailable',
@@ -384,6 +455,7 @@ function App() {
       const payload = await requestJson('/api/usage/history')
       if (isRecord(payload) && Array.isArray(payload.executions)) {
         setHistory(payload.executions as UsageHistoryRecord[])
+        setHistoryStorage(payload.storage === 'sqlite' || payload.storage === 'memory' ? payload.storage : '')
       }
     } catch {
       setHistoryError('Oturum geçmişi şu anda alınamıyor.')
@@ -399,7 +471,7 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: task,
-        model: 'auto',
+        ...copilotModelPayload(),
         strategy: selectedStrategy,
         ...(maxAiCreditLimit.trim()
           ? { maxAiCreditLimit: Number(maxAiCreditLimit) }
@@ -432,6 +504,8 @@ function App() {
           prompt: prompt.trim(),
           providers,
           strategy,
+          ...copilotModelPayload(),
+          ...(claudeModel ? { claudeModel } : {}),
           ...(maxAiCreditLimit.trim()
             ? { maxAiCreditLimit: Number(maxAiCreditLimit) }
             : {}),
@@ -539,6 +613,70 @@ function App() {
     if (plan) setIncludedCredits(String(plan.includedAiCreditsPerSeat))
   }
 
+  function copilotModelLabel() {
+    if (copilotModel !== 'auto') return copilotModels.find((item) => item.id === copilotModel)?.name ?? copilotModel
+    const tier = copilotAutoTiers.find((item) => item.id === copilotAutoTier)
+    return tier ? `Otomatik · ${tier.label}` : 'Otomatik'
+  }
+
+  function claudeModelLabel() {
+    if (!claudeModel) return claudeStatus.model ?? 'SDK varsayılanı'
+    return claudeModels.find((item) => item.value === claudeModel)?.displayName ?? claudeModel
+  }
+
+  function renderCopilotModelSelect() {
+    return (
+      <div className="field-grow">
+        <label htmlFor="copilot-model">Copilot modeli</label>
+        <select id="copilot-model" value={copilotModel} disabled={isLoading} onChange={(event) => setCopilotModel(event.target.value)}>
+          <option value="auto">Otomatik (Copilot seçer)</option>
+          {copilotModels.map((item) => (
+            <option key={item.id} value={item.id} disabled={item.policy?.state === 'disabled'}>
+              {item.name}
+              {typeof item.billing?.multiplier === 'number' ? ` · ${formatNumber(item.billing.multiplier)}x` : ''}
+              {item.policy?.state === 'disabled' ? ' · politika nedeniyle kapalı' : ''}
+            </option>
+          ))}
+        </select>
+        {copilotModel === 'auto' && copilotAutoTiers.length > 0 && (
+          <>
+            <label htmlFor="copilot-auto-tier">Otomatik yönlendirme profili</label>
+            <select id="copilot-auto-tier" value={copilotAutoTier} disabled={isLoading} onChange={(event) => setCopilotAutoTier(event.target.value)}>
+              <option value="">Varsayılan</option>
+              {copilotAutoTiers.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </>
+        )}
+        <p className="helper">
+          {copilotModels.length
+            ? 'Liste Copilot hesabınızın model kataloğundan gelir; çarpan, AI Credit tüketimini temel orana göre gösterir.'
+            : copilotModelsNote || 'Adlandırılmış model listesi alınamadı; Otomatik kullanılır.'}
+        </p>
+      </div>
+    )
+  }
+
+  function renderClaudeModelSelect() {
+    return (
+      <div className="field-grow">
+        <label htmlFor="claude-model">Claude modeli</label>
+        <select id="claude-model" value={claudeModel} disabled={isLoading || !claudeStatus.runnable} onChange={(event) => setClaudeModel(event.target.value)}>
+          <option value="">{`Sunucu varsayılanı (${claudeStatus.model ?? 'SDK varsayılanı'})`}</option>
+          {claudeModels.filter((item) => item.value !== 'default').map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.displayName}{item.resolvedModel ? ` · ${item.resolvedModel}` : ''}
+            </option>
+          ))}
+        </select>
+        <p className="helper">
+          {!claudeStatus.runnable
+            ? 'Claude yapılandırıldığında modeller listelenir.'
+            : claudeModelsNote || 'Liste kurulu Claude Agent SDK/CLI’den gelir. Model fiyatları farklıdır; çağrılar Anthropic API hesabınızdan ücretlendirilir.'}
+        </p>
+      </div>
+    )
+  }
+
   function renderPlayground() {
     return (
       <div className="page-stack">
@@ -610,6 +748,10 @@ function App() {
                 />
               </div>
             </div>
+            <div className="inline-fields">
+              {renderCopilotModelSelect()}
+              {renderClaudeModelSelect()}
+            </div>
             {strategy === 'skill' && <InfoNote title="Copilot Skill">Yalnızca Copilot tarafında etkinleştirilir ve SDK'nın gerçek skill olaylarıyla ölçülür.</InfoNote>}
             {strategy === 'subagents' && <InfoNote title="Copilot alt ajanları">Yalnızca Copilot tarafında etkinleştirilir; gerçek SDK olayları raporlanır.</InfoNote>}
             {strategy === 'fleet' && <InfoNote title="Deneysel Copilot Fleet">Fleet yalnızca seçildiğinde çalıştırılır; runtime desteği yoksa hata gösterilir.</InfoNote>}
@@ -634,12 +776,14 @@ function App() {
             execution={providerExecutions.find((item) => item.provider === 'github-copilot')}
             isLoading={isLoading && requestedProviders.includes('github-copilot')}
             claudeStatus={claudeStatus}
+            selectedModelLabel={copilotModelLabel()}
           />
           <ProviderResultCard
             provider="claude"
             execution={providerExecutions.find((item) => item.provider === 'claude')}
             isLoading={isLoading && requestedProviders.includes('claude')}
             claudeStatus={claudeStatus}
+            selectedModelLabel={claudeModelLabel()}
           />
         </section>
         {comparisonSummary &&
@@ -659,7 +803,7 @@ function App() {
     return (
       <div className="page-stack">
         <section className="panel">
-          <SectionHeading eyebrow="SDK OTURUM VERİSİ" title="Kullanım analizi" text="Son 30 yerel oturumun gerçek SDK ölçümleri. Tam istek ve yanıt tutulmaz; en fazla 80 karakterlik görev etiketi saklanır." />
+          <SectionHeading eyebrow="SDK OTURUM VERİSİ" title="Kullanım analizi" text="Son yerel oturumların gerçek SDK ölçümleri. Tam istek ve yanıt tutulmaz; en fazla 80 karakterlik görev etiketi saklanır." />
           {historyError && <p className="helper warning">{historyError}</p>}
           {recent ? (
             <>
@@ -725,7 +869,11 @@ function App() {
           </div> : <EmptyState title="Kota verisi kullanılamıyor" text="Bu hesap veya SDK sürümü kota bilgisini sunmadı; dashboard çalışmaya devam eder." />}
         </section>
         <section className="panel">
-          <SectionHeading eyebrow="SON OTURUMLAR" title="Çalıştırma geçmişi" text="En fazla 30 çalıştırma sunucu belleğinde tutulur." />
+          <SectionHeading eyebrow="SON OTURUMLAR" title="Çalıştırma geçmişi" text={historyStorage === 'sqlite'
+            ? 'Son 30 çalıştırma gösterilir. Kayıtlar yerel SQLite veritabanında kalıcı olarak tutulur; sunucu yeniden başlatıldığında kaybolmaz.'
+            : historyStorage === 'memory'
+              ? 'Veritabanı kullanılamıyor: kayıtlar yalnızca sunucu belleğinde tutulur ve yeniden başlatmada kaybolur.'
+              : 'Son 30 çalıştırma gösterilir.'} />
           <label className="history-filter" htmlFor="history-provider">Sağlayıcı filtresi</label>
           <select id="history-provider" value={historyProvider} onChange={(event) => setHistoryProvider(event.target.value as 'all' | ProviderId)}>
             <option value="all">Tüm sağlayıcılar</option>
@@ -752,7 +900,7 @@ function App() {
                 <td>{totalTokens}</td>
                 <td>{cost === undefined || !costUnit ? 'Kullanılamıyor' : `${formatNumber(cost)} ${costUnit}`}</td>
                 <td>{duration === undefined ? 'Kullanılamıyor' : `${(duration / 1000).toFixed(2)} sn`}</td>
-                <td>{item.error ? 'Başarısız' : 'Tamamlandı'}</td>
+                <td title={item.error}>{item.error ? `Başarısız${item.errorCode ? ` · ${item.errorCode}` : ''}` : 'Tamamlandı'}</td>
               </tr>
             })}
           </tbody></table></div> : <EmptyState title="Geçmiş boş" text="Çalıştırmalar tamamlandıkça burada görünür." />}
@@ -802,6 +950,7 @@ function App() {
         <form className="stack-form" onSubmit={handleComparison}>
           <label htmlFor="comparison-task">Karşılaştırılacak tek görev</label>
           <textarea id="comparison-task" rows={4} required value={comparisonTask} onChange={(event) => setComparisonTask(event.target.value)} placeholder="Tüm seçilen yöntemlere aynı görev gönderilir." />
+          <div className="inline-fields">{renderCopilotModelSelect()}</div>
           <div className="question-grid">{strategies.map((item) => <label className="check-row" key={item.id}><input type="checkbox" checked={comparisonStrategies.includes(item.id)} onChange={() => toggleStrategy(item.id)} />{item.title} <span className="helper">{item.hint}</span></label>)}</div>
           {comparisonStrategies.includes('fleet') && <p className="helper warning">Fleet deneysel SDK özelliğidir; yalnızca kullanıcı çalıştırdığında çağrılır.</p>}
           <button className="primary-button" disabled={isLoading || !comparisonStrategies.length}>{isLoading ? 'Çalıştırmalar sürüyor…' : 'Seçilen yöntemleri çalıştır'}</button>
@@ -900,11 +1049,13 @@ function ProviderResultCard({
   execution,
   isLoading,
   claudeStatus,
+  selectedModelLabel,
 }: {
   provider: ProviderId
   execution?: ProviderExecution
   isLoading: boolean
   claudeStatus: ClaudeStatus
+  selectedModelLabel: string
 }) {
   const isCopilot = provider === 'github-copilot'
   const providerCostLabel = execution?.providerCostUnit === 'AI Credit'
@@ -954,7 +1105,7 @@ function ProviderResultCard({
       <div className="model-resolution">
         <div><span>Platform</span><strong>{isCopilot ? 'GitHub Copilot' : 'Anthropic Claude'}</strong></div>
         <div><span>Çalışma zamanı</span><strong>{isCopilot ? 'Copilot SDK' : 'Claude Agent SDK'}</strong></div>
-        <div><span>Model seçimi</span><strong>{isCopilot ? 'Otomatik' : claudeStatus.model ?? 'SDK varsayılanı'}</strong></div>
+        <div><span>Model seçimi</span><strong>{selectedModelLabel}</strong></div>
         <div>
           <span>{isCopilot ? 'Copilot tarafından seçilen gerçek model' : 'Gerçek kullanılan model'}</span>
           <strong>{execution?.actualModel ?? (execution ? 'Kullanılamıyor' : 'Çalıştırma sonrasında gösterilir')}</strong>
