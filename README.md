@@ -48,6 +48,7 @@ npm run dev
 ```sh
 npm run build
 npm run lint
+npm run typecheck
 npm run test:unit
 npm run test:copilot-sdk
 ```
@@ -107,7 +108,7 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 
 | Yöntem | Uç nokta | Açıklama |
 |---|---|---|
-| GET | `/api/health` | API sağlık durumu |
+| GET | `/api/health` | API, Copilot (başlatılıyor/hazır/kullanılamıyor, CLI sürümü, oturum açma durumu) ve Claude yapılandırma durumu |
 | GET | `/api/copilot/models` | Runtime model kataloğu ve SDK metadata |
 | POST | `/api/copilot/chat` | Yeni oturumda Copilot isteği ve ölçümler |
 | POST | `/api/copilot/fleet` | Deneysel Fleet RPC; destek yoksa açıklayıcı hata |
@@ -119,6 +120,15 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 | POST | `/api/advisor/recommend` | Ücretsiz kural tabanlı mod önerisi |
 | GET | `/api/licensing/plans` | Merkezi plan fiyatları/tahsisatları ve kaynak metadata |
 | POST | `/api/licensing/calculate` | Koltuk, dahil kredi ve ek kullanım hesabı |
+
+## Copilot oturum güvenliği ve hata yönetimi
+
+- Her Copilot oturumu boş, geçici bir çalışma dizininde (`os.tmpdir()/copilot-explorer-*`) açılır; proje klasörü oturuma verilmez.
+- Ana ajan yalnızca SDK'nın `BuiltInTools.Isolated` kümesindeki oturum içi araçları kullanabilir (alt ajan, skill, görev tamamlama). Dosya, shell, ağ ve MCP araçları kapalıdır; izin gerektiren her istek `onPermissionRequest` ile reddedilir.
+- İşlem bitince oturum `disconnect` ve `deleteSession` ile kapatılır, geçici dizin silinir. Temizlik hataları yalnızca sunucu günlüğüne yazılır ve asıl hatayı örtmez.
+- Çalıştırmalar `COPILOT_REQUEST_TIMEOUT_MS` (varsayılan 120000, en fazla 900000) süresiyle sınırlıdır. Süre dolarsa veya istemci bağlantıyı kapatırsa `session.abort()` çağrılır.
+- Copilot CLI başlatılamazsa API çalışmaya devam eder (degraded mode). Lisans ve Mod Danışmanı çalışır; Copilot uç noktaları `503 / COPILOT_UNAVAILABLE` döndürür ve 30 saniyelik bekleme sonrasında yeniden bağlanmayı dener.
+- Hata yanıtları `{ error, code }` biçimindedir. `code` sabit bir değerdir (`COPILOT_AUTH_REQUIRED`, `COPILOT_RATE_LIMITED`, `COPILOT_TIMEOUT`, `SESSION_LIMIT_REACHED` vb.); ham SDK mesajları, yollar ve istek kimlikleri kullanıcıya gönderilmez.
 
 ## Deneysel özellikler ve sınırlamalar
 

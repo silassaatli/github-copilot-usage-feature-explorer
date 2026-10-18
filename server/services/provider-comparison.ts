@@ -30,6 +30,7 @@ export interface ProviderExecution {
   subagentsUsed?: number
   events: ProviderEvent[]
   error?: string
+  errorCode?: string
   setupHint?: string
   rawMetrics?: Record<string, unknown>
 }
@@ -218,20 +219,26 @@ export async function runProvidersIndependently(
   providers: ProviderId[],
   comparisonId: string,
   runners: Record<ProviderId, () => Promise<ProviderExecution>>,
+  describeError?: (
+    provider: ProviderId,
+    error: unknown,
+  ) => { error: string; errorCode: string } | undefined,
 ): Promise<ProviderExecution[]> {
   return Promise.all(providers.map(async (provider) => {
     try {
       return await runners[provider]()
-    } catch {
+    } catch (error) {
+      const described = describeError?.(provider, error)
       return {
         id: `${comparisonId}-${provider}`,
         comparisonId,
         provider,
         runtime: provider === 'claude' ? 'Claude Agent SDK' : 'GitHub Copilot SDK',
         events: [],
-        error: provider === 'claude'
+        error: described?.error ?? (provider === 'claude'
           ? 'Claude çalıştırılamadı. Kimlik doğrulama ve API erişimini kontrol edin.'
-          : 'Copilot çalıştırılamadı. SDK bağlantısını ve Copilot erişimini kontrol edin.',
+          : 'Copilot çalıştırılamadı. SDK bağlantısını ve Copilot erişimini kontrol edin.'),
+        ...(described ? { errorCode: described.errorCode } : {}),
       }
     }
   }))

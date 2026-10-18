@@ -26,7 +26,6 @@ test('normalizes Copilot measurements without mapping AI Credits to USD', () => 
       durationMs: 500,
       context: { percentage: 25 },
       modelMetrics: [{ reasoningTokens: 4 }],
-      calls: [],
       toolCalls: 0,
       subagentCalls: 0,
       skillsInvoked: [],
@@ -123,6 +122,30 @@ test('provider failures are isolated and do not discard a successful result', as
 
   assert.equal(executions[0].response, 'Tamam')
   assert.match(executions[1].error ?? '', /Claude çalıştırılamadı/)
+  assert.equal(executions[1].errorCode, undefined)
+})
+
+test('provider failures can carry a safe described error and code', async () => {
+  const executions = await runProvidersIndependently(
+    ['github-copilot', 'claude'],
+    'comparison-2',
+    {
+      'github-copilot': async () => {
+        throw new Error('raw internal detail')
+      },
+      claude: async () => {
+        throw new Error('upstream failed')
+      },
+    },
+    (provider) => provider === 'github-copilot'
+      ? { error: 'Copilot hız sınırına ulaşıldı.', errorCode: 'COPILOT_RATE_LIMITED' }
+      : undefined,
+  )
+
+  assert.equal(executions[0].error, 'Copilot hız sınırına ulaşıldı.')
+  assert.equal(executions[0].errorCode, 'COPILOT_RATE_LIMITED')
+  assert.match(executions[1].error ?? '', /Claude çalıştırılamadı/)
+  assert.equal(executions[1].errorCode, undefined)
 })
 
 test('Claude is unavailable without an API key and status never returns the key', () => {

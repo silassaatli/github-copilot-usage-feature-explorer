@@ -96,6 +96,7 @@ interface ProviderExecution {
   subagentsUsed?: number
   events: Array<{ type: string; label: string; timestamp?: string }>
   error?: string
+  errorCode?: string
   setupHint?: string
 }
 
@@ -198,7 +199,8 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
     const error = isRecord(payload) && typeof payload.error === 'string'
       ? payload.error
       : 'İstek tamamlanamadı.'
-    throw new Error(error)
+    const code = isRecord(payload) && typeof payload.code === 'string' ? payload.code : undefined
+    throw new Error(code ? `${error} (Hata kodu: ${code})` : error)
   }
   return payload
 }
@@ -956,6 +958,7 @@ function ProviderResultCard({
           ? <ClaudeSetupNotice status={claudeStatus} />
           : <div className="provider-unavailable">
               <strong>{execution.error}</strong>
+              {execution.errorCode && <small>Hata kodu: {execution.errorCode}</small>}
               {execution.setupHint && <p>{execution.setupHint}</p>}
             </div>
       )}
