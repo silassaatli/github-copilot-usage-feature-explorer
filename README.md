@@ -36,6 +36,32 @@ ANTHROPIC_API_KEY=...
 
 Sunucu, kök dizindeki `.env` dosyasını `dotenv/config` ile yükler. `.env` ve diğer `.env.*` dosyaları Git tarafından yok sayılır; gerçek anahtarı kaynak koduna veya istemciye koymayın. Anahtar yoksa uygulama normal çalışır, Claude paneli kurulum adımlarını gösterir ve Copilot kullanılabilir kalır. Anahtarın geçerliliği ilk açık Claude çalıştırmasında sınanır; sayfa yüklenirken Claude isteği gönderilmez.
 
+### Claude yapılandırması
+
+| Değişken | Zorunlu | Açıklama |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Evet | Anthropic Console > API Keys bölümünde oluşturulan API anahtarı (biçim genellikle `sk-ant-api…`). OAuth (`sk-ant-oat…`) ve Admin (`sk-ant-admin…`) anahtarları reddedilir. |
+| `CLAUDE_AGENT_MODEL` | Hayır | Agent SDK'ya iletilecek model. Takma ad (`opus`, `sonnet`, `haiku`, `fable`) veya tam model kimliği (ör. `claude-haiku-5-5`). Boşsa CLI varsayılan modeli kullanılır. |
+| `CLAUDE_AGENT_EFFORT` | Hayır | `low`, `medium`, `high`, `xhigh` veya `max`. Boşsa model varsayılanı kullanılır. |
+| `CLAUDE_REQUEST_TIMEOUT_MS` | Hayır | Claude çalıştırma süre sınırı (varsayılan 120000, en fazla 900000). |
+
+Değişiklikten sonra sunucuyu yeniden başlatın; `.env` yalnızca başlangıçta okunur.
+
+**Maliyet:** Claude çağrıları Anthropic API (Console) hesabından, kullanılan modelin token fiyatlarına göre ücretlendirilir. Claude Pro/Max aboneliği veya Claude Code erişimi bu API kullanımını kapsamaz ya da ücretsiz yapmaz; Console hesabında kredi bakiyesi veya faturalandırma tanımlı olmalıdır. Uygulamanın gösterdiği `total_cost_usd` SDK'nın tahminidir, fatura değildir; gerçek tutar için Console > Usage/Billing sayfasına bakın. Maliyeti sınırlamak için Console'da çalışma alanı harcama limiti tanımlamanız ve demo için daha düşük maliyetli bir model (`CLAUDE_AGENT_MODEL`) seçmeniz önerilir.
+
+**Bağlantı durumu (`/api/health` → `services.claude`, `/api/claude/status`):**
+
+| `state` | Anlamı |
+|---|---|
+| `missing_key` | Anahtar yok; Claude çalıştırılamaz. |
+| `invalid_key_format` | Anahtar OAuth/Admin türünde; çalıştırılmaz. |
+| `sdk_unavailable` | Agent SDK yüklenemedi. |
+| `unverified` | Anahtar var ama henüz doğrulanmadı. Anahtarın varlığı bağlantının çalıştığı anlamına gelmez. |
+| `verified` | Aynı anahtarla gerçek bir Claude çalıştırması başarıyla tamamlandı (`lastVerifiedAt`). |
+| `auth_failed` / `error` | Son gerçek çalıştırma kimlik doğrulama veya başka bir API hatasıyla bitti (`lastErrorCode`). |
+
+**Güvenlik ve yalıtım:** Claude Code alt sürecine yalnızca `.env`'deki anahtar verilir. Üst süreçten gelen `CLAUDE_*`/`ANTHROPIC_*` değişkenleri (iç içe Claude Code oturumu işaretleri, OAuth token'ları, Bedrock/Vertex yönlendirmeleri) ve GitHub token'ları aktarılmaz. `CLAUDE_CONFIG_DIR` geçici bir dizine yönlendirildiği için makinedeki claude.ai oturumu ve `~/.claude` ayarları kullanılmaz. Başlangıçta SDK'nın bildirdiği kimlik kaynağı `ANTHROPIC_API_KEY` değilse çalıştırma durdurulur (`CLAUDE_CREDENTIAL_SOURCE`). Süre aşımında veya tarayıcı isteği iptal ettiğinde SDK `abortController` ile durdurulur; o ana kadar üretilmiş tokenlar yine ücretlendirilebilir.
+
 ## Kurulum ve çalıştırma
 
 ```sh
@@ -61,7 +87,8 @@ npm run test:copilot-sdk
 
 - Ortak görev tek `/api/compare` isteğiyle seçilen sağlayıcılara ayrı ayrı gönderilir. İki sağlayıcı çalıştırılmadan önce açık kullanıcı onayı gerekir; sağlayıcı hataları birbirinden bağımsız yakalanır.
 - Copilot model kataloğu sunucuda tutulur; Playground'da anlamsız tek seçenekli model menüsü yoktur. Copilot isteği `auto` kipini kullanır, SDK'nın gerçek model ölçümü sonuçta gösterilir.
-- Claude Agent SDK model seçimi göndermez; kurulu SDK/CLI'nin varsayılan modelini kullanır. SDK, bu pakette hesap model kataloğu API'si sağlamaz.
+- Claude modeli sunucu tarafında `CLAUDE_AGENT_MODEL` ile seçilir; tanımlı değilse SDK/CLI varsayılanı kullanılır. Kartta istenen model ve SDK'nın `modelUsage` ile bildirdiği gerçek model ayrı gösterilir.
+- Claude ölçümleri yalnızca SDK bildirdiğinde gösterilir: tokenlar (`modelUsage`, yoksa `usage`), tur sayısı (`num_turns`), model çağrısı (benzersiz asistan mesajı), araç çağrısı ve `total_cost_usd` tahmini. Bildirilmeyen alan "Kullanılamıyor" olarak kalır.
 - Claude çalıştırması `tools: []`, `permissionMode: 'dontAsk'`, boş ayar kaynakları, kalıcı olmayan oturum ve sistem geçici diziniyle sınırlandırılır; proje dosyalarına, shell'e, MCP'ye veya Skills'e araç erişimi verilmez.
 - Copilot AI Credit ile Claude USD maliyet tahmini farklı birimler olarak gösterilir ve birbirleriyle kıyaslanmaz. Hız ve token özeti yalnızca iki tarafta da ölçülen alanları karşılaştırır; yanıt kalitesi hakkında iddia üretmez.
 - `POST /api/copilot/chat` ve deneysel Fleet dahil mevcut Copilot yolları korunur.
@@ -112,8 +139,8 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 | GET | `/api/copilot/models` | Runtime model kataloğu ve SDK metadata |
 | POST | `/api/copilot/chat` | Yeni oturumda Copilot isteği ve ölçümler |
 | POST | `/api/copilot/fleet` | Deneysel Fleet RPC; destek yoksa açıklayıcı hata |
-| GET | `/api/claude/status` | Kimlik bilgisi değerini açığa çıkarmadan Claude yapılandırma durumu |
-| POST | `/api/claude/chat` | Araç erişimi kapalı Claude Agent SDK çalıştırması |
+| GET | `/api/claude/status` | Kimlik bilgisi değerini açığa çıkarmadan Claude durumu (yapılandırıldı / doğrulandı ayrımıyla) |
+| POST | `/api/claude/chat` | Araç erişimi kapalı Claude Agent SDK çalıştırması; hatalar `{ error, code, setupHint }` |
 | POST | `/api/compare` | Sağlayıcı çalıştırmaları, bağımsız hata sonuçları ve ortak metrik özeti |
 | GET | `/api/copilot/quota` | Deneysel hesap kota RPC'si |
 | GET | `/api/usage/history` | Bellekteki en fazla 30 ölçüm özeti |
@@ -140,7 +167,7 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 - Hesap kota alanı varsa SDK'nın döndürdüğü gibi gösterilir; quota alan isimleri runtime'a göre değişebilir.
 - AI Credit metrikleri API/runtime sağlayınca gösterilir; bulunmadığında sıfır veya tahmin gösterilmez.
 - Claude `total_cost_usd`, Agent SDK'nın oturum için verdiği tahmindir, fatura değildir. SDK token/cost alanları veya güncel model fiyatı sağlamazsa alan kullanılamıyor gösterilir; model fiyatları elle sabitlenmez.
-- Claude modeli ayrıca seçilmez; güncel Agent SDK/CLI varsayılanı kullanılır. Makinede Anthropic API anahtarı bulunmadığından canlı Claude bağlantısı bu geliştirme sırasında denenmemiştir.
+- Canlı Claude bağlantısı (gerçek anahtarla model çağrısı) bu geliştirme sırasında maliyet nedeniyle henüz denenmemiştir. Alt sürecin Windows'ta başlaması, kimlik kaynağının `ANTHROPIC_API_KEY` olması ve claude.ai oturumundan yalıtım, sahte anahtarla ve hiç istek gönderilmeden doğrulanmıştır.
 - Plan fiyatlandırması USD ve aylık bazdadır. Enterprise koltuk fiyatı değişkendir. Planlar değişebileceğinden kaynak tarihini tekrar kontrol edin.
 
 ## Mentor demosu (5 dakika)
@@ -153,4 +180,4 @@ Plan koltuk ücretleri ve AI Credit tahsisatları tek merkezi veri modülündedi
 
 ## Testler
 
-`npm run test:unit` kural motoru, lisans hesabı ve sağlayıcı normalizasyonu/karşılaştırma testlerini çalıştırır. `npm run test:copilot-sdk` korunmuş SDK kanıt örneğini çalıştırır ve gerçek Copilot kullanımı tüketir. Claude canlı çağrısı ayrı ve isteğe bağlıdır; API anahtarı ile maliyet gerektirir.
+`npm run test:unit` kural motoru, lisans hesabı, sağlayıcı normalizasyonu/karşılaştırma, Copilot oturum güvenliği ve Claude entegrasyonu testlerini çalıştırır. Claude testleri sahte bir SDK sorgusu kullanır; ağ çağrısı yapmaz ve API anahtarı gerektirmez. `npm run test:copilot-sdk` korunmuş SDK kanıt örneğini çalıştırır ve gerçek Copilot kullanımı tüketir. Claude canlı çağrısı ayrı ve isteğe bağlıdır; API anahtarı ile maliyet gerektirir.

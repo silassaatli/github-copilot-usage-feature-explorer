@@ -5,7 +5,7 @@ import express from 'express'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getRecommendation } from './services/advisor.js'
-import { getClaudeConnectionStatus, runClaude } from './services/claude.js'
+import { describeClaudeError, getClaudeConnectionStatus, runClaude } from './services/claude.js'
 import {
   closeCopilotSession,
   createCopilotConnection,
@@ -40,6 +40,7 @@ const skillDirectory = join(process.cwd(), 'skills')
 const promptLimit = 12_000
 const nanoAiuPerAiCredit = 1_000_000_000
 const copilotRequestTimeoutMs = parseTimeoutMs(process.env.COPILOT_REQUEST_TIMEOUT_MS, 120_000)
+const claudeRequestTimeoutMs = parseTimeoutMs(process.env.CLAUDE_REQUEST_TIMEOUT_MS, 120_000)
 type AccountModel = Awaited<ReturnType<typeof copilotClient.rpc.models.list>>['models'][number]
 
 app.use(express.json({ limit: '64kb' }))
@@ -47,18 +48,16 @@ app.use(express.json({ limit: '64kb' }))
 app.get('/api/health', async (_request, response) => {
   const [copilot, claude] = await Promise.all([
     copilotConnection.getHealth(),
-    getClaudeConnectionStatus(process.env.ANTHROPIC_API_KEY),
+    getClaudeConnectionStatus(),
   ])
   response.json({
     status: copilot.state === 'ready' && copilot.authenticated ? 'ok' : 'degraded',
     services: {
       api: { state: 'ready' },
       copilot,
-      claude: {
-        state: claude.state,
-        configured: claude.configured,
-        message: claude.message,
-      },
+      // Anahtarın kendisi hiçbir zaman yanıta eklenmez; "verified" yalnızca
+      // aynı anahtarla başarılı bir gerçek çalıştırmadan sonra true olur.
+      claude,
     },
   })
 })
@@ -140,7 +139,7 @@ app.get('/api/usage/history', (_request, response) => {
 })
 
 app.get('/api/claude/status', async (_request, response) => {
-  response.json(await getClaudeConnectionStatus(process.env.ANTHROPIC_API_KEY))
+  response.json(await getClaudeConnectionStatus())
 })
 
 app.post('/api/claude/chat', async (request, response) => {
@@ -150,23 +149,20 @@ app.post('/api/claude/chat', async (request, response) => {
     return
   }
   const comparisonId = randomUUID()
-  const auth = await getClaudeConnectionStatus(process.env.ANTHROPIC_API_KEY)
-  if (auth.state === 'missing_key' || auth.state === 'sdk_unavailable') {
-    response.status(503).json({ error: auth.message, setupHint: auth.setupHint })
-    return
-  }
   try {
-    const result = await runClaude(parsed.value.prompt, comparisonId)
+    const result = await runClaude(parsed.value.prompt, comparisonId, {
+      signal: createRequestSignal(response),
+      timeoutMs: claudeRequestTimeoutMs,
+    })
     addClaudeHistory(result, parsed.value.prompt)
     response.json(result)
   } catch (error) {
-    const auth = await getClaudeConnectionStatus(process.env.ANTHROPIC_API_KEY)
-    console.error('Claude Agent SDK isteği başarısız oldu:', error instanceof Error ? error.name : 'UnknownError')
-    response.status(auth.state === 'auth_failed' ? 401 : 502).json({
-      error: auth.state === 'auth_failed'
-        ? auth.message
-        : 'Claude çalıştırılamadı. API erişimini kontrol edin.',
-      ...(auth.setupHint ? { setupHint: auth.setupHint } : {}),
+    const described = describeClaude(error)
+    if (response.headersSent || response.destroyed) return
+    response.status(described.status).json({
+      error: described.message,
+      code: described.code,
+      ...(described.setupHint ? { setupHint: described.setupHint } : {}),
     })
   }
 })
@@ -205,22 +201,20 @@ app.post('/api/compare', async (request, response) => {
     },
     claude: async () => {
       if (!selectedProviders.includes('claude')) throw new Error('Provider not selected')
-      const auth = await getClaudeConnectionStatus(process.env.ANTHROPIC_API_KEY)
-      if (auth.state === 'missing_key' || auth.state === 'sdk_unavailable') {
-        return {
-          id: randomUUID(),
-          comparisonId,
-          provider: 'claude',
-          runtime: 'Claude Agent SDK',
-          events: [],
-          error: auth.message,
-          setupHint: auth.setupHint,
-        }
-      }
-      return runClaude(parsed.value.prompt, comparisonId)
+      return runClaude(parsed.value.prompt, comparisonId, {
+        signal,
+        timeoutMs: claudeRequestTimeoutMs,
+      })
     },
   }, (provider, error) => {
-    if (provider !== 'github-copilot') return undefined
+    if (provider === 'claude') {
+      const described = describeClaude(error)
+      return {
+        error: described.message,
+        errorCode: described.code,
+        ...(described.setupHint ? { setupHint: described.setupHint } : {}),
+      }
+    }
     const described = describeCopilotError(error)
     if (described.code === 'COPILOT_REQUEST_FAILED') {
       console.error('Karşılaştırmadaki Copilot çalıştırması başarısız oldu:', error)
@@ -384,6 +378,16 @@ function createRequestSignal(response: express.Response): AbortSignal {
     if (!response.writableFinished) controller.abort()
   })
   return controller.signal
+}
+
+/** Claude hatasını güvenli koda çevirir; sunucu günlüğüne yalnızca kod ve hata adı yazılır. */
+function describeClaude(error: unknown) {
+  const described = describeClaudeError(error)
+  console.error(
+    `Claude Agent SDK çalıştırması başarısız oldu (${described.code}):`,
+    error instanceof Error ? error.name : 'UnknownError',
+  )
+  return described
 }
 
 function sendCopilotError(

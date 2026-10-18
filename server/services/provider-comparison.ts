@@ -20,6 +20,7 @@ export interface ProviderExecution {
   cacheCreationTokens?: number
   reasoningTokens?: number
   durationMs?: number
+  numTurns?: number
   modelCalls?: number
   toolCalls?: number
   providerCost?: number
@@ -61,6 +62,7 @@ interface CopilotExecutionInput {
 
 interface ClaudeUsageInput {
   id: string
+  requestedModel?: string
   model?: string
   response?: string
   inputTokens?: number
@@ -69,6 +71,9 @@ interface ClaudeUsageInput {
   cacheCreationTokens?: number
   reasoningTokens?: number
   durationMs?: number
+  numTurns?: number
+  modelCalls?: number
+  toolCalls?: number
   providerCostUsd?: number
   providerCostSource?: string
   events?: ProviderEvent[]
@@ -121,6 +126,7 @@ export function normalizeClaudeExecution(
     comparisonId,
     provider: 'claude',
     runtime: 'Claude Agent SDK',
+    ...(execution.requestedModel ? { requestedModel: execution.requestedModel } : {}),
     actualModel: execution.model,
     response: execution.response,
     inputTokens: execution.inputTokens,
@@ -129,6 +135,9 @@ export function normalizeClaudeExecution(
     cacheCreationTokens: execution.cacheCreationTokens,
     reasoningTokens: execution.reasoningTokens,
     durationMs: execution.durationMs,
+    ...(execution.numTurns !== undefined ? { numTurns: execution.numTurns } : {}),
+    ...(execution.modelCalls !== undefined ? { modelCalls: execution.modelCalls } : {}),
+    ...(execution.toolCalls !== undefined ? { toolCalls: execution.toolCalls } : {}),
     ...(execution.providerCostUsd !== undefined
       ? {
           providerCost: execution.providerCostUsd,
@@ -222,7 +231,7 @@ export async function runProvidersIndependently(
   describeError?: (
     provider: ProviderId,
     error: unknown,
-  ) => { error: string; errorCode: string } | undefined,
+  ) => { error: string; errorCode: string; setupHint?: string } | undefined,
 ): Promise<ProviderExecution[]> {
   return Promise.all(providers.map(async (provider) => {
     try {
@@ -239,50 +248,8 @@ export async function runProvidersIndependently(
           ? 'Claude çalıştırılamadı. Kimlik doğrulama ve API erişimini kontrol edin.'
           : 'Copilot çalıştırılamadı. SDK bağlantısını ve Copilot erişimini kontrol edin.'),
         ...(described ? { errorCode: described.errorCode } : {}),
+        ...(described?.setupHint ? { setupHint: described.setupHint } : {}),
       }
     }
   }))
-}
-
-export function getClaudeAuthStatus(apiKey: string | undefined) {
-  const configured = Boolean(apiKey?.trim())
-  return configured
-    ? {
-        state: 'ready' as const,
-        configured: true,
-        message: 'Hazır',
-        setupHint: undefined,
-      }
-    : {
-        state: 'missing_key' as const,
-        configured: false,
-        message: 'API anahtarı eksik',
-        setupHint: 'Anthropic Console API anahtarını proje kökündeki .env dosyasına ekleyip uygulamayı yeniden başlatın.',
-      }
-}
-
-export function getClaudeStatus(
-  apiKey: string | undefined,
-  sdkAvailable: boolean,
-  authenticationFailed: boolean,
-) {
-  const configured = Boolean(apiKey?.trim())
-  if (!sdkAvailable) {
-    return {
-      state: 'sdk_unavailable' as const,
-      configured,
-      message: 'Claude SDK kullanılamıyor',
-      setupHint: 'Bağımlılıkları npm install ile yükleyip sunucuyu yeniden başlatın.',
-    }
-  }
-  if (!configured) return getClaudeAuthStatus(apiKey)
-  if (authenticationFailed) {
-    return {
-      state: 'auth_failed' as const,
-      configured: true,
-      message: 'Kimlik doğrulama başarısız',
-      setupHint: 'ANTHROPIC_API_KEY değerini Anthropic Console üzerinden kontrol edin ve sunucuyu yeniden başlatın.',
-    }
-  }
-  return getClaudeAuthStatus(apiKey)
 }

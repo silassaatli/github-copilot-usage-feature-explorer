@@ -2,8 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   createComparisonSummary,
-  getClaudeAuthStatus,
-  getClaudeStatus,
   normalizeClaudeExecution,
   normalizeCopilotExecution,
   runProvidersIndependently,
@@ -146,21 +144,4 @@ test('provider failures can carry a safe described error and code', async () => 
   assert.equal(executions[0].errorCode, 'COPILOT_RATE_LIMITED')
   assert.match(executions[1].error ?? '', /Claude çalıştırılamadı/)
   assert.equal(executions[1].errorCode, undefined)
-})
-
-test('Claude is unavailable without an API key and status never returns the key', () => {
-  assert.deepEqual(getClaudeAuthStatus(undefined), {
-    state: 'missing_key',
-    configured: false,
-    message: 'API anahtarı eksik',
-    setupHint: 'Anthropic Console API anahtarını proje kökündeki .env dosyasına ekleyip uygulamayı yeniden başlatın.',
-  })
-  assert.deepEqual(getClaudeAuthStatus('configured-but-not-returned'), {
-    state: 'ready',
-    configured: true,
-    message: 'Hazır',
-    setupHint: undefined,
-  })
-  assert.equal(getClaudeStatus('configured-but-not-returned', false, false).state, 'sdk_unavailable')
-  assert.equal(getClaudeStatus('configured-but-not-returned', true, true).state, 'auth_failed')
 })

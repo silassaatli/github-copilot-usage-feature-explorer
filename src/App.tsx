@@ -63,13 +63,26 @@ interface Execution {
 }
 
 type ProviderId = 'github-copilot' | 'claude'
-type ClaudeStatusState = 'checking' | 'ready' | 'missing_key' | 'auth_failed' | 'sdk_unavailable'
+const claudeStatusStates = [
+  'missing_key',
+  'invalid_key_format',
+  'sdk_unavailable',
+  'unverified',
+  'verified',
+  'auth_failed',
+  'error',
+] as const
+type ClaudeStatusState = 'checking' | (typeof claudeStatusStates)[number]
 
 interface ClaudeStatus {
   state: ClaudeStatusState
   configured: boolean
+  verified: boolean
+  runnable: boolean
   message: string
   setupHint?: string
+  model?: string
+  lastVerifiedAt?: string
 }
 
 interface ProviderExecution {
@@ -86,6 +99,7 @@ interface ProviderExecution {
   cacheCreationTokens?: number
   reasoningTokens?: number
   durationMs?: number
+  numTurns?: number
   modelCalls?: number
   toolCalls?: number
   providerCost?: number
@@ -273,6 +287,8 @@ function App() {
   const [claudeStatus, setClaudeStatus] = useState<ClaudeStatus>({
     state: 'checking',
     configured: false,
+    verified: false,
+    runnable: false,
     message: 'Bağlantı durumu denetleniyor.',
   })
   const [history, setHistory] = useState<UsageHistoryRecord[]>([])
@@ -325,25 +341,24 @@ function App() {
       ) {
         throw new Error('Claude bağlantı durumu alınamadı.')
       }
-      const state = payload.state
-      if (
-        state !== 'ready' &&
-        state !== 'missing_key' &&
-        state !== 'auth_failed' &&
-        state !== 'sdk_unavailable'
-      ) {
-        throw new Error('Claude bağlantı durumu alınamadı.')
-      }
+      const state = claudeStatusStates.find((item) => item === payload.state)
+      if (!state) throw new Error('Claude bağlantı durumu alınamadı.')
       setClaudeStatus({
         state,
         configured: payload.configured,
+        verified: payload.verified === true,
+        runnable: payload.runnable === true,
         message: payload.message,
         ...(typeof payload.setupHint === 'string' ? { setupHint: payload.setupHint } : {}),
+        ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
+        ...(typeof payload.lastVerifiedAt === 'string' ? { lastVerifiedAt: payload.lastVerifiedAt } : {}),
       })
     } catch {
       setClaudeStatus({
         state: 'sdk_unavailable',
         configured: false,
+        verified: false,
+        runnable: false,
         message: 'Claude SDK kullanılamıyor',
         setupHint: 'API sunucusunu ve Claude SDK kurulumunu kontrol edin.',
       })
@@ -401,7 +416,7 @@ function App() {
     if (!prompt.trim() || isLoading) return
     if (
       providers.length === 2 &&
-      !window.confirm('Bu işlem aynı görevi iki sağlayıcıda da çalıştırır ve her iki tarafta kullanım/maliyet oluşturabilir. Devam etmek istiyor musunuz?')
+      !window.confirm('Bu işlem aynı görevi iki sağlayıcıda da çalıştırır. Copilot tarafında AI Credit tüketilebilir; Claude tarafı Anthropic API hesabınızdan token başına ücretlendirilir. Devam etmek istiyor musunuz?')
     ) return
 
     setIsLoading(true)
@@ -906,6 +921,9 @@ function ProviderResultCard({
       ? [['Önbellek yazma tokenı', formatNumber(execution.cacheCreationTokens)] as [string, string]]
       : []),
     ['Akıl yürütme token', metricValue(execution?.reasoningTokens)],
+    ...(!isCopilot && execution?.numTurns !== undefined
+      ? [['Tur sayısı', formatNumber(execution.numTurns)] as [string, string]]
+      : []),
     ['Model çağrısı', metricValue(execution?.modelCalls)],
     ['Araç çağrısı', metricValue(execution?.toolCalls)],
     ['Süre', execution?.durationMs === undefined ? 'Kullanılamıyor' : `${(execution.durationMs / 1000).toFixed(2)} sn`],
@@ -929,14 +947,14 @@ function ProviderResultCard({
           <h2>{providerLabel(provider)}</h2>
           <p>{isCopilot ? 'GitHub Copilot SDK' : 'Claude Agent SDK'}</p>
         </div>
-        <span className={`status-pill ${!isCopilot && claudeStatus.state !== 'ready' ? 'status-unavailable' : ''}`}>
+        <span className={`status-pill ${!isCopilot && !claudeStatus.runnable ? 'status-unavailable' : ''}`}>
           {isCopilot ? 'Otomatik yönlendirme' : claudeStatus.message}
         </span>
       </div>
       <div className="model-resolution">
         <div><span>Platform</span><strong>{isCopilot ? 'GitHub Copilot' : 'Anthropic Claude'}</strong></div>
         <div><span>Çalışma zamanı</span><strong>{isCopilot ? 'Copilot SDK' : 'Claude Agent SDK'}</strong></div>
-        {isCopilot && <div><span>Model seçimi</span><strong>Otomatik</strong></div>}
+        <div><span>Model seçimi</span><strong>{isCopilot ? 'Otomatik' : claudeStatus.model ?? 'SDK varsayılanı'}</strong></div>
         <div>
           <span>{isCopilot ? 'Copilot tarafından seçilen gerçek model' : 'Gerçek kullanılan model'}</span>
           <strong>{execution?.actualModel ?? (execution ? 'Kullanılamıyor' : 'Çalıştırma sonrasında gösterilir')}</strong>
@@ -944,17 +962,17 @@ function ProviderResultCard({
       </div>
       {isLoading && <div className="loading-state"><span className="spinner" />{providerLabel(provider)} yanıtı bekleniyor…</div>}
       {!execution && !isLoading && (
-        !isCopilot && claudeStatus.state !== 'ready'
+        !isCopilot && !claudeStatus.runnable
           ? <ClaudeSetupNotice status={claudeStatus} />
           : <EmptyState
               title="Henüz çalıştırma yok"
               text={isCopilot
                 ? 'İşlemden sonra SDK’nın ölçtüğü gerçek model ve kullanım burada görünür.'
-                : 'Claude Agent SDK varsayılan modeliyle yanıt ve API ölçümleri burada görünür.'}
+                : 'Claude yanıtı ve Agent SDK’nın bildirdiği ölçümler burada görünür. Her çalıştırma Anthropic API hesabınızdan ücretlendirilir.'}
             />
       )}
       {execution?.error && (
-        !isCopilot && claudeStatus.state !== 'ready'
+        !isCopilot && !claudeStatus.runnable
           ? <ClaudeSetupNotice status={claudeStatus} />
           : <div className="provider-unavailable">
               <strong>{execution.error}</strong>
@@ -992,14 +1010,19 @@ function ProviderResultCard({
 }
 
 function ClaudeSetupNotice({ status }: { status: ClaudeStatus }) {
-  const heading = status.state === 'auth_failed'
-    ? 'Claude kimlik doğrulaması başarısız'
+  if (status.state === 'checking') {
+    return <div className="loading-state"><span className="spinner" />Claude bağlantı durumu denetleniyor…</div>
+  }
+  const heading = status.state === 'invalid_key_format'
+    ? 'Claude anahtar türü uygun değil'
     : status.state === 'sdk_unavailable'
       ? 'Claude SDK kullanılamıyor'
-      : 'Claude bağlantısı gerekli'
+      : 'Claude yapılandırılmamış'
   const setupText = status.state === 'sdk_unavailable'
     ? 'Claude SDK yüklemesini ve API sunucusunu kontrol edin.'
-    : 'Karşılaştırma için sunucu ortamına ANTHROPIC_API_KEY eklenmelidir.'
+    : status.state === 'invalid_key_format'
+      ? 'ANTHROPIC_API_KEY bir OAuth veya Admin anahtarı içeriyor; Claude için Console API anahtarı gerekir.'
+      : 'Claude çalıştırmak için sunucu ortamına ANTHROPIC_API_KEY eklenmelidir.'
 
   return (
     <div className="provider-unavailable claude-setup">
@@ -1057,6 +1080,7 @@ function Metric({ label, value, note }: { label: string; value: string; note?: s
     'Önbellek yazma tokenı': 'Sağlayıcının önbelleğe yazdığı bağlam miktarı.',
     'Akıl yürütme token': 'Model destekliyorsa akıl yürütme için raporlanan kullanım.',
     'Model çağrısı': 'Modelden yanıt üretmek için yapılan gerçek çağrı sayısı.',
+    'Tur sayısı': 'Claude Agent SDK sonucunun bildirdiği konuşma turu sayısı (num_turns).',
     'Araç çağrısı': "Agent'ın terminal, dosya veya başka araçları kullanma sayısı.",
     'Bağlam kullanımı': 'Modelin bağlam penceresi kapasitesinin ne kadarının kullanıldığını gösterir.',
     'AI Credit': 'GitHub Copilot kullanımının GitHub tarafından raporlanan tüketim birimi.',
