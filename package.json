@@ -9,11 +9,12 @@
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "node --watch --import tsx server/index.ts",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "tsx server/index.ts",
+    "serve": "tsx server/index.ts --serve-frontend",
     "test:copilot-sdk": "tsx scripts/copilot-sdk-test.ts",
     "test:unit": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json && tsc -p tsconfig.test.json"

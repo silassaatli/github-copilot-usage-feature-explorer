@@ -14,7 +14,8 @@ export function calculateLicense(body: unknown): CalculationResult {
   const seats = values.seats
   const expectedCredits = values.expectedCreditsPerSeat
   const includedCredits = values.includedCreditsPerSeat
-  const enterprisePrice = values.enterpriseSeatPriceUsd
+  // seatPriceUsd her plan için kullanıcı fiyatıdır; enterpriseSeatPriceUsd geriye dönük uyumluluk içindir.
+  const enterprisePrice = values.seatPriceUsd ?? values.enterpriseSeatPriceUsd
   if (!Number.isInteger(seats) || Number(seats) < 1 || Number(seats) > 100_000) {
     return { ok: false, error: 'Kullanıcı sayısı 1 ile 100.000 arasında olmalıdır.' }
   }
@@ -43,8 +44,11 @@ export function calculateLicense(body: unknown): CalculationResult {
   }
 
   const seatCount = Number(seats)
-  const seatPrice =
-    plan.monthlySeatPriceUsd ?? (typeof enterprisePrice === 'number' ? enterprisePrice : undefined)
+  const userSeatPrice = typeof enterprisePrice === 'number' ? enterprisePrice : undefined
+  const seatPrice = userSeatPrice ?? plan.monthlySeatPriceUsd ?? undefined
+  const seatPriceSource = userSeatPrice !== undefined
+    ? 'user'
+    : plan.monthlySeatPriceUsd !== null ? 'plan-data' : 'missing'
   const monthlySubscriptionUsd =
     seatPrice === undefined ? undefined : seatCount * seatPrice
   const totalIncludedCredits =
@@ -67,6 +71,8 @@ export function calculateLicense(body: unknown): CalculationResult {
       plan: plan.name,
       seats: seatCount,
       monthlySeatPriceUsd: seatPrice,
+      seatPriceSource,
+      includedCreditsSource: typeof includedCredits === 'number' ? 'user' : 'plan-data',
       monthlySubscriptionUsd,
         annualSubscriptionUsd:
           monthlySubscriptionUsd === undefined ? undefined : monthlySubscriptionUsd * 12,

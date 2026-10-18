@@ -42,12 +42,12 @@ interface CopilotExecutionInput {
   model: string
   response?: string
   usage: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    reasoningTokens: number
+    inputTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    reasoningTokens?: number
     aiCredits?: number
-    modelCalls: number
+    modelCalls?: number
     durationMs: number
     context?: { percentage?: number }
     modelMetrics: Array<{

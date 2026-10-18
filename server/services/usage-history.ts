@@ -11,13 +11,14 @@ export interface ExecutionRecord {
   model: string
   usage: {
     status: string
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    reasoningTokens: number
+    /** Sağlayıcı bildirmediyse tanımsızdır; sıfır olarak varsayılmaz. */
+    inputTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    reasoningTokens?: number
     aiCredits?: number
     nanoAiu?: number
-    modelCalls: number
+    modelCalls?: number
     durationMs: number
     context?: {
       currentTokens: number
@@ -98,16 +99,30 @@ export interface ProviderHistoryRecord {
   events: ExecutionRecord['events']
 }
 
+export type HistoryStatus = 'success' | 'error'
+
 export interface HistoryQuery {
   limit?: number
   provider?: ProviderId
+  status?: HistoryStatus
 }
 
 export interface HistoryStore {
   readonly kind: 'sqlite' | 'memory'
   add(record: ProviderHistoryRecord): void
   list(query?: HistoryQuery): ProviderHistoryRecord[]
-  count(): number
+  /** Saklama sınırı içindeki tüm kayıtlar (raporlar için). */
+  listAll(): ProviderHistoryRecord[]
+  count(query?: Omit<HistoryQuery, 'limit'>): number
+  /** Tüm kayıtları siler ve silinen kayıt sayısını döndürür. */
+  clear(): number
+}
+
+function matches(record: ProviderHistoryRecord, query: Omit<HistoryQuery, 'limit'>) {
+  if (query.provider && record.provider !== query.provider) return false
+  if (query.status === 'error' && !record.error) return false
+  if (query.status === 'success' && record.error) return false
+  return true
 }
 
 const defaultListLimit = 30
@@ -133,12 +148,20 @@ export function createMemoryHistoryStore(maxRecords = defaultListLimit): History
     },
     list(query = {}) {
       return records
-        .filter((item) => !query.provider || item.provider === query.provider)
+        .filter((item) => matches(item, query))
         .slice(0, clampLimit(query.limit))
         .map(cloneRecord)
     },
-    count() {
-      return records.length
+    listAll() {
+      return records.map(cloneRecord)
+    },
+    count(query = {}) {
+      return records.filter((item) => matches(item, query)).length
+    },
+    clear() {
+      const deleted = records.length
+      records.length = 0
+      return deleted
     },
   }
 }
@@ -202,14 +225,25 @@ export function createSqliteHistoryStore(
       SELECT id FROM executions ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?
     )
   `)
-  const selectAll = db.prepare('SELECT * FROM executions ORDER BY created_at DESC, rowid DESC LIMIT ?')
-  const selectByProvider = db.prepare(
-    'SELECT * FROM executions WHERE provider = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
-  )
   const selectEvents = db.prepare(
     'SELECT * FROM execution_events WHERE execution_id = ? ORDER BY seq',
   )
-  const countRows = db.prepare('SELECT COUNT(*) AS total FROM executions')
+  const clearAll = db.prepare('DELETE FROM executions')
+
+  // Filtreler yalnızca sabit SQL parçalarından kurulur; değerler parametre olarak bağlanır.
+  function where(query: Omit<HistoryQuery, 'limit'>) {
+    const conditions: string[] = []
+    const values: SQLInputValue[] = []
+    if (query.provider) {
+      conditions.push('provider = ?')
+      values.push(query.provider)
+    }
+    if (query.status) {
+      conditions.push('status = ?')
+      values.push(query.status)
+    }
+    return { sql: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '', values }
+  }
 
   function toRow(record: ProviderHistoryRecord): Row {
     const usage = record.usage
@@ -347,14 +381,23 @@ export function createSqliteHistoryStore(
       }
     },
     list(query = {}) {
-      const limit = clampLimit(query.limit)
-      const rows = (query.provider
-        ? selectByProvider.all(query.provider, limit)
-        : selectAll.all(limit)) as Row[]
+      const filter = where(query)
+      const rows = db
+        .prepare(`SELECT * FROM executions ${filter.sql} ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+        .all(...filter.values, clampLimit(query.limit)) as Row[]
       return rows.map(fromRow)
     },
-    count() {
-      return (countRows.get() as { total: number }).total
+    listAll() {
+      const rows = db.prepare('SELECT * FROM executions ORDER BY created_at DESC, rowid DESC').all() as Row[]
+      return rows.map(fromRow)
+    },
+    count(query = {}) {
+      const filter = where(query)
+      return (db.prepare(`SELECT COUNT(*) AS total FROM executions ${filter.sql}`).get(...filter.values) as { total: number }).total
+    },
+    clear() {
+      // model_usage ve execution_events ON DELETE CASCADE ile birlikte silinir.
+      return Number(clearAll.run().changes)
     },
   }
 }
