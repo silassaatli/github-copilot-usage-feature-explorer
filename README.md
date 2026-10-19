@@ -161,7 +161,7 @@ flowchart LR
 | Claude | `server/services/claude.ts` (run, model listing, status, isolation, error codes) |
 | History & reports | `server/services/usage-history.ts`, `usage-report.ts`, `server/db/*.ts` |
 | Other services | `advisor.ts`, `licensing.ts`, `provider-comparison.ts`, `server/data/copilot-plans.ts` |
-| Demo mode (Vercel) | `server/demo/*.ts`, `api/[...slug].ts` — see [Vercel demo deployment](#vercel-demo-deployment) |
+| Demo mode (Vercel) | `server/demo/*.ts`, `api/**/*.ts` — see [Vercel demo deployment](#vercel-demo-deployment) |
 | Frontend | `src/App.tsx`, `src/sections/*`, `src/components/*`, `src/content/*`, `src/lib/*` |
 | Tests | `tests/*.test.ts` (Node test runner; no real provider calls) |
 
@@ -293,7 +293,7 @@ The real application requires a GitHub account already logged in via the Copilot
 
 - `server/demo/fake-providers.ts` implements the same `CopilotService` interface and Claude `queryFn` injection point that the test suite already uses to avoid real provider calls (see `tests/api.test.ts`). It requires no API key and no Copilot/GitHub login, and makes no network call to GitHub or Anthropic.
 - `server/demo/create-demo-app.ts` builds the Express app (`createApp` from `server/app.ts`) with these fake providers, an in-memory history store (`persistent: false` — it resets on every cold start/redeploy), and `trustedHosts: 'any'`, which lifts the local-only `Host`/`Origin` restriction. Lifting that restriction is safe here specifically because there is no real key or account behind it to abuse.
-- `api/[...slug].ts` is a single Vercel serverless function that forwards every `/api/*` request to this demo Express app.
+- `api/_demo-app.ts` builds a single shared instance of this demo Express app. Every other file under `api/` (`api/health.ts`, `api/compare.ts`, `api/copilot/models.ts`, etc. — one per route in [API endpoints](#api-endpoints)) just re-exports that same instance as its default export. This mirrors Vercel's file-system routing one-to-one instead of relying on a single `[...catch-all]` function, after a `[...slug].ts` catch-all was found to only match single-segment paths (e.g. `/api/health` worked, `/api/copilot/models` returned Vercel's own 404) on this project. Files prefixed with `_` are excluded from Vercel's routing by convention, so `_demo-app.ts` itself is never exposed as a route.
 - Every demo response is explicitly labeled: health messages state "Demo mode: fake Copilot provider (no real account used)" and "Demo mode: history is kept in memory, not persistent", and every generated run response is prefixed `[Demo]` and states it is not a real model reply.
 
 **Demo responses must not be read as real Copilot or Claude usage, cost, or performance data.** They are fixed, synthetic numbers meant only to exercise the UI end to end.
