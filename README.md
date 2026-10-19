@@ -1,265 +1,410 @@
-# GitHub Copilot Kullanım ve Özellik Gezgini
+# GitHub Copilot Feature & Usage Explorer
 
-*(GitHub Copilot Usage & Feature Explorer)*
+A local, single-user dashboard that runs the **same task** through the **GitHub Copilot SDK** and the **Claude Agent SDK**, side by side, and shows the usage metrics each provider actually reports — model, tokens, duration, AI Credits, and an estimated Claude cost in USD.
 
-Şirketlerin GitHub Copilot'ı nasıl kullanabileceğini gösteren, Türkçe arayüzlü yerel bir demo uygulaması. Aynı görevi **GitHub Copilot SDK** ve **Claude Agent SDK** ile çalıştırır. Sağlayıcıların bildirdiği gerçek kullanım metriklerini (model, token, süre, AI Credit, Claude USD tahmini) yan yana gösterir. Ayrıca şunları içerir:
+The application's interface is in Turkish (it was built for a Turkish-speaking audience); this documentation is in English.
 
-- kalıcı kullanım geçmişi ve raporlar
-- kural tabanlı mod danışmanı
-- lisans/maliyet hesaplayıcısı
-- Copilot özellik rehberi
+![Technology stack badges](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)
+![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=fff)
+![Express](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=fff)
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.13-339933?logo=node.js&logoColor=fff)
+![GitHub Copilot SDK](https://img.shields.io/badge/GitHub%20Copilot%20SDK-1.0-181717?logo=github&logoColor=fff)
+![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.3-D97757)
+![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=fff)
+![Tests](https://img.shields.io/badge/tests-74%20passing-brightgreen)
 
-Uygulama yerel makinede (`127.0.0.1`) tek kullanıcı için çalışır. **Sayfa açıldığında hiçbir ücretli model çağrısı yapılmaz.** Model çalıştırmaları yalnızca siz butona bastığınızda başlar.
+## Table of contents
 
-## İçindekiler
+1. [Application overview](#application-overview)
+2. [Problem statement and objectives](#problem-statement-and-objectives)
+3. [Key features](#key-features)
+4. [Screenshots](#screenshots)
+5. [Application sections explained](#application-sections-explained)
+6. [Architecture and request lifecycle](#architecture-and-request-lifecycle)
+7. [Technology stack](#technology-stack)
+8. [Installation and local setup](#installation-and-local-setup)
+9. [Environment variables and configuration](#environment-variables-and-configuration)
+10. [Running the frontend and backend](#running-the-frontend-and-backend)
+11. [How the Copilot SDK integration works](#how-the-copilot-sdk-integration-works)
+12. [How Claude integration works](#how-claude-integration-works)
+13. [Usage metrics, token accounting and AI credit limitations](#usage-metrics-token-accounting-and-ai-credit-limitations)
+14. [Security considerations](#security-considerations)
+15. [API endpoints](#api-endpoints)
+16. [Vercel demo deployment](#vercel-demo-deployment)
+17. [Testing and build verification](#testing-and-build-verification)
+18. [Troubleshooting](#troubleshooting)
+19. [Known limitations and future improvements](#known-limitations-and-future-improvements)
+20. [License](#license)
 
-1. [Özellikler](#özellikler)
-2. [Mimari ve teknolojiler](#mimari-ve-teknolojiler)
-3. [Gereksinimler](#gereksinimler)
-4. [Kurulum](#kurulum)
-5. [`.env` ve yapılandırma](#env-ve-yapılandırma)
-6. [API anahtarlarının güvenli yönetimi](#api-anahtarlarının-güvenli-yönetimi)
-7. [Çalıştırma: geliştirme ve production](#çalıştırma-geliştirme-ve-production)
-8. [Ücretsiz yerel testler](#ücretsiz-yerel-testler)
-9. [SQLite geçmişi, yedekleme ve sıfırlama](#sqlite-geçmişi-yedekleme-ve-sıfırlama)
-10. [Gerçek ölçümler ve tahminler](#gerçek-ölçümler-ve-tahminler)
-11. [Copilot model kataloğu sınırlamaları](#copilot-model-kataloğu-sınırlamaları)
-12. [Claude kullanımı ve olası ücretler](#claude-kullanımı-ve-olası-ücretler)
-13. [Güvenlik ve hata yönetimi](#güvenlik-ve-hata-yönetimi)
-14. [API uç noktaları](#api-uç-noktaları)
-15. [Bilinen sınırlamalar ve backlog](#bilinen-sınırlamalar-ve-backlog)
+## Application overview
 
-## Özellikler
+This project is a demo/evaluation tool for teams deciding how to use GitHub Copilot, and for comparing it against the Claude Agent SDK on the same task. It runs entirely on your own machine (`127.0.0.1`), using your own GitHub Copilot login and, optionally, your own Anthropic API key. No request is sent anywhere when the page loads — every provider call only happens when you explicitly click a run button.
 
-| Bölüm | Ne yapar | Veri türü |
+A hero screenshot of the running application is intended to appear here. See [Screenshots](#screenshots) for current status.
+
+## Problem statement and objectives
+
+Teams evaluating "should we use GitHub Copilot, and how" usually have to read vendor marketing pages, guess at token costs, and manually compare a second provider. This project exists to make that evaluation **empirical and local**:
+
+- Run the same prompt through Copilot and/or Claude and look at the metrics each SDK actually returns, instead of estimating from documentation alone.
+- Keep a persistent, inspectable history of every run (model, tokens, duration, cost) instead of relying on memory or screenshots of a billing dashboard.
+- Separate **real measurements** (what the SDK reported) from **estimates** (USD cost, license calculations) and from **rule-based guidance** (mode advisor) — and label each one as such in the UI.
+- Document GitHub Copilot's feature surface (Chat, Agent Mode, Skills, subagents, Fleet, MCP, Hooks, session limits, model selection) in one place, in plain language.
+
+It is **not** a production multi-tenant product, a billing dashboard, or a benchmark suite with statistically validated results. Any number shown is either a direct SDK measurement for that one run, or an explicitly labeled estimate/heuristic.
+
+## Key features
+
+| Section | What it does | Data type |
 |---|---|---|
-| **Oyun Alanı** | Bir görevi yalnızca Copilot'ta, yalnızca Claude'da veya (onaydan sonra) ikisinde birden çalıştırır. Gerçekte kullanılan modeli ve metrikleri gösterir. Ortak metrikleri karşılaştırır. Copilot için çalıştırma yöntemi, model ve AI Credit sınırı; Claude için model seçilebilir. | Gerçek ölçüm (SDK); Claude USD tahmindir |
-| **Kullanım Analizi** | Son Copilot çalıştırmasının ayrıntıları (model kırılımı, bağlam penceresi, olay zaman çizelgesi), anlık Copilot kotası ve kalıcı çalıştırma geçmişi. Geçmiş sağlayıcıya ve duruma göre filtrelenebilir, kayıt ayrıntıları açılabilir, onayla temizlenebilir. | Gerçek ölçüm; kota deneysel ve anlık |
-| **Mod Danışmanı** | Görev gereksinimlerine göre Sohbet / Ajan / Skill / MCP / Fleet önerisi verir. Model çağırmaz. | Kural tabanlı |
-| **Karşılaştırma Laboratuvarı** | Aynı görevi Copilot'un Normal, Skill, Alt ajan ve Fleet yöntemleriyle ayrı oturumlarda çalıştırıp tabloda karşılaştırır. | Gerçek ölçüm |
-| **Lisans ve Maliyet** | Koltuk ücreti ile AI Credit kullanımını ayrı hesaplar. Beklenen kullanımı isterseniz son gerçek ölçümden türetir. | Tahmin; plan fiyatları belgeden elle girilmiştir |
-| **Raporlar ve Backlog** | Kayıtlı geçmişten sağlayıcı bazında rapor üretir (her metrikte kaç çalıştırmanın değeri bildirdiği gösterilir) ve iyileştirme backlog'unu listeler. | Kayıtlı gerçek veriden |
-| **Özellik Rehberi** | Sohbet, Ajan Modu, Skills, alt ajanlar, Fleet, MCP, Hooks, oturum sınırları ve model seçimini açıklar. | Bilgilendirme |
+| **Playground** | Runs a task on Copilot only, Claude only, or (after confirmation) both. Shows the actually-used model and metrics. | Real measurement (SDK); the Claude USD figure is an estimate |
+| **Usage Analytics** | Details of the latest Copilot run (model breakdown, context window, event timeline), a live Copilot quota snapshot, and persistent run history with filtering, drill-down and confirmed clearing | Real measurement; quota is an experimental, point-in-time value |
+| **Model Advisor** | Suggests Chat / Agent / Skill / MCP / Fleet based on task characteristics. Makes no model call. | Rule-based |
+| **Comparison Lab** | Runs the same task with Copilot's Normal, Skill, Subagents and Fleet strategies in separate sessions and tabulates the result | Real measurement |
+| **Licensing & Cost** | Calculates seat cost and AI Credit usage separately; can derive expected usage from the last real measurement | Estimate; plan prices are manually entered from vendor docs |
+| **Reports & Backlog** | Generates a per-provider report from recorded history (how many runs reported each metric) and lists the improvement backlog | Derived from recorded real data |
+| **Feature Guide** | Explains Chat, Agent Mode, Skills, subagents, Fleet, MCP, Hooks, session limits and model selection | Informational |
 
-Her bölüm ve kart, verinin türünü bir etiketle açıkça belirtir: *Gerçek ölçüm*, *Tahmin*, *Örnek / varsayım*, *Kural tabanlı* veya *Bilgilendirme*. Kenar çubuğu Copilot, Claude ve veritabanı durumlarını gerçek `/api/health` yanıtından 30 saniyede bir okur.
+Every section and card in the UI carries an explicit label for its data type: *real measurement*, *estimate*, *example/assumption*, *rule-based*, or *informational*. The sidebar reads the real `/api/health` response every 30 seconds to show Copilot, Claude and database status.
 
-## Mimari ve teknolojiler
+## Screenshots
 
-```text
-Tarayıcı (React 19 + TypeScript, Vite 8)
-   │  /api/...  (geliştirmede Vite proxy → 127.0.0.1:3001)
-   ▼
-Express 5 API — yalnızca 127.0.0.1, yerel Host/Origin denetimi
-   ├── GitHub Copilot SDK (@github/copilot-sdk) ── copilot-runtime alt süreci
-   │      oturum başına geçici dizin, yalnızca oturum içi araçlar, izinler reddedilir
-   ├── Claude Agent SDK (@anthropic-ai/claude-agent-sdk) ── Claude Code alt süreci
-   │      araçsız, yalıtılmış ortam ve yapılandırma dizini, yalnızca .env anahtarı
-   └── SQLite (Node'un yerleşik node:sqlite modülü) ── data/explorer.sqlite
+**Status: pending.** This repository does not yet contain screenshot files, and none have been added as part of this change — no browser automation tool was available in the environment that produced this documentation pass, and screenshots were intentionally not fabricated.
+
+The intended location and filenames are already reserved under [`docs/images/`](docs/images/):
+
+| File | Section it should capture |
+|---|---|
+| `docs/images/application-overview.png` | Full-page view of the Playground with the sidebar visible |
+| `docs/images/playground.png` | A prompt submitted, a provider/strategy selected, and a completed result card |
+| `docs/images/usage-analytics.png` | A run's token/duration/model-call breakdown and the history table |
+| `docs/images/model-advisor.png` | The advisor questionnaire and a generated recommendation with its explanation |
+| `docs/images/comparison-lab.png` | A side-by-side Copilot vs. Claude (or strategy vs. strategy) comparison table |
+| `docs/images/licensing-cost.png` | A license/cost calculation with its inputs and derived result |
+| `docs/images/feature-guide.png` | The feature guide cards (Chat, Agent Mode, Skills, Fleet, MCP, Hooks, …) |
+
+To add them: run the app locally (`npm run dev`), navigate to each section listed above, capture a screenshot with non-sensitive example data (no real API keys, account names, or billing details visible), save it under `docs/images/` using the filename above, and reference it in the relevant section below with standard Markdown image syntax, e.g. `![Playground](docs/images/playground.png)`.
+
+## Application sections explained
+
+### Playground
+
+You type a task description, choose which provider(s) to run it on (Copilot, Claude, or both — running both requires an extra confirmation step since it may incur cost on both sides), optionally choose a Copilot execution strategy (Normal / Skill / Subagents / Fleet) and a model, and submit. The result card shows the provider's actual response and its reported metrics.
+
+For Copilot, the UI distinguishes the **requested** model (what you selected, which may be `auto`) from the **actually used** model (what the SDK reports after the run) — the runtime, not the application, makes the final model choice when `auto` or an auto-routing tier is selected.
+
+Errors are shown with the server's coded response (`error`, `code`, optional `setupHint`). If Copilot is unavailable (CLI not running, not authenticated) or Claude is not configured (missing/invalid API key), the relevant panel reports that state instead of silently failing or guessing a result.
+
+### Usage Analytics
+
+This section explains each metric exactly as the backend records it — it does not claim access to GitHub's organization-wide Copilot billing or usage data; it only shows what the SDK reports for runs made through this application:
+
+- **Input / output tokens** — reported directly by the provider's SDK when available.
+- **Total tokens** — the sum of the above, only computed when both are known.
+- **Duration (ms)** — wall-clock time for the run as measured by the server.
+- **Model calls** — how many underlying model invocations the run made (can be >1 for Skill/Subagents/Fleet strategies).
+- **AI Credits (Copilot)** — the SDK's own `totalNanoAiu` measurement, converted to AI Credit units (10⁹ nano-AIU = 1 AI Credit). This is a consumption unit, not a currency.
+- **Estimated cost in USD (Claude)** — the Claude Agent SDK's own `total_cost_usd`, computed from the SDK's price table. This is an **estimate**, not an invoice; the real amount is in Anthropic Console → Usage/Billing.
+
+Any metric the provider does not report is shown as "Unknown" and is excluded from totals — it is never silently treated as zero. Every report in the Reports section states, for each metric, how many of the successful runs actually reported a value for it.
+
+### Model Advisor
+
+The advisor is a fixed decision tree (`server/services/advisor.ts`), not a model call and not a learned or benchmarked recommendation. It asks structured yes/no questions (file changes needed? terminal needed? multiple independent domains? parallelizable? sequential dependencies? reusable instructions? external service? deterministic checks needed?) and a complexity estimate, and returns one of: Simple Chat, Agent, Agent + Skill, Agent + MCP, Agent + Subagents, or Fleet/Orchestration, plus supporting recommendations, a cost category (low/medium/high), and warnings (e.g. "parallel execution may not suit this task's sequential dependencies").
+
+Treat its output as a starting heuristic for discussion, not as a benchmarked or objectively verified performance result — it has not been validated against real task outcomes.
+
+### Comparison Lab
+
+This section runs the **same prompt** through Copilot's four execution strategies (Normal, Skill, Subagents, Fleet) in separate sessions and places the results in one table, or (from the Playground) runs Copilot and Claude independently on the same prompt.
+
+When comparing **across providers** (Copilot vs. Claude), be aware that several things differ beyond just "the model":
+
+| Dimension | Copilot | Claude |
+|---|---|---|
+| Platform | GitHub Copilot (your logged-in GitHub account) | Anthropic API (your Console account) |
+| SDK / runtime | `@github/copilot-sdk`, talking to the Copilot CLI | `@anthropic-ai/claude-agent-sdk`, spawning a Claude Code subprocess |
+| Model | Chosen from the account's catalog, or `auto` | Chosen from `supportedModels()`, or the SDK default |
+| Authentication | Your machine's GitHub Copilot CLI login | `ANTHROPIC_API_KEY` in `.env` |
+| Token accounting | SDK-reported input/output tokens, no cache breakdown surfaced | SDK-reported input/output/cache tokens |
+| Billing unit | AI Credits (a consumption unit under your Copilot plan) | USD (API billing against your Console balance) |
+
+AI Credits and USD are **never converted or summed** — the comparison summary and reports always show them as separate units. If a provider is not configured (e.g. no Anthropic API key), its panel explains what is missing and what remains unavailable; it does not fabricate a result for it.
+
+### Licensing & Cost
+
+This section keeps three distinct things separate, since conflating them is a common and costly mistake:
+
+1. **Seat subscription cost** — what your organization pays per Copilot seat per billing cycle (manually entered from GitHub's published plan pricing, with a `lastVerified` date; this may have changed since).
+2. **AI Credit usage** — consumption against whatever credit allowance your plan includes, which the calculator can derive from your last real measured run if you choose.
+3. **Claude API billing** — a **separate, pay-as-you-go** Anthropic Console balance, billed by token price for the model used. **A Claude Pro/Max subscription or Claude Code access does not cover or waive this API usage; it requires a Console account with credit or billing configured.** Likewise, a GitHub Copilot seat does not grant Anthropic API access.
+
+No price or quota figure here is invented: plan data comes from GitHub's own documentation (dated, see `server/data/copilot-plans.ts`), and every computed result states whether each input came from that plan data or from a value you entered yourself. The application never displays your actual invoice amount — it computes an estimate from the inputs you give it.
+
+### Feature Guide
+
+A plain-language reference card for each Copilot capability relevant to this evaluation: Chat, Agent Mode, Skills, custom/subagents, Fleet/Orchestration, MCP, Hooks, session limits, and model selection. Each card states what the capability is, when to use it, when to avoid it, and what drives its cost — for example, Skills add reusable instructions to context (which can increase token usage), MCP connects a session to external tools (disabled in this demo's Copilot sessions for isolation), and session limits are enforced by the SDK itself, not simulated by this application.
+
+## Architecture and request lifecycle
+
+```mermaid
+flowchart LR
+    UI["Browser UI<br/>React 19 + TypeScript (Vite)"]
+    API["Express 5 API<br/>127.0.0.1 only, local Host/Origin check"]
+    COP["GitHub Copilot SDK<br/>@github/copilot-sdk<br/>copilot-runtime subprocess"]
+    CLA["Claude Agent SDK<br/>@anthropic-ai/claude-agent-sdk<br/>Claude Code subprocess"]
+    DB["SQLite<br/>node:sqlite<br/>data/explorer.sqlite"]
+
+    UI -->|"/api/* (Vite proxy in dev)"| API
+    API --> COP
+    API --> CLA
+    API --> DB
+    COP -->|execution metrics| API
+    CLA -->|execution metrics| API
+    API -->|JSON response| UI
 ```
 
-| Katman | Dosyalar |
+**Request lifecycle for a Playground run:**
+
+1. The browser posts to `/api/copilot/chat`, `/api/claude/chat`, or `/api/compare` with the prompt, strategy and model selection.
+2. `server/app.ts` validates the request body (prompt length, strategy enum, model format) and checks the `Host`/`Origin` headers are local.
+3. For Copilot, `server/services/copilot-runner.ts` opens an isolated session via `copilot-runtime.ts`, runs the prompt with the selected strategy, and collects the SDK's reported usage.
+4. For Claude, `server/services/claude.ts` spawns a single-turn, tool-less Claude Agent SDK session, enforces a request timeout via `AbortController`, and collects the SDK's reported usage and cost estimate.
+5. On success, the normalized execution is persisted via `server/services/usage-history.ts` (SQLite by default) and returned to the browser. On failure, a coded error (and a failed history entry) is returned instead — a Copilot failure never blocks or corrupts the Claude result, and vice versa.
+6. The Usage Analytics and Reports sections read back from the same history store.
+
+| Layer | Files |
 |---|---|
-| Sunucu girişi | `server/index.ts` (ortam, kalıcılık, Copilot istemcisi, dinleme, kapanış) |
-| HTTP uygulaması | `server/app.ts` (`createApp`: rotalar, doğrulama, hata yanıtları; testlerde sahte sağlayıcılarla kullanılır) |
-| Copilot | `server/services/copilot-runner.ts` (çalıştırma, katalog, kota), `copilot-runtime.ts` (güvenlik, zaman aşımı, bağlantı, hata kodları) |
-| Claude | `server/services/claude.ts` (çalıştırma, model listesi, durum, yalıtım, hata kodları) |
-| Geçmiş ve rapor | `server/services/usage-history.ts`, `usage-report.ts`, `server/db/*.ts` |
-| Diğer | `advisor.ts`, `licensing.ts`, `provider-comparison.ts`, `server/data/copilot-plans.ts` |
-| Ön yüz | `src/App.tsx`, `src/sections/*`, `src/components/*`, `src/content/*`, `src/lib/*` |
-| Testler | `tests/*.test.ts` (Node test runner; gerçek sağlayıcı çağrısı yok) |
+| Server entry | `server/index.ts` (env, persistence, Copilot client, listen, shutdown) |
+| HTTP app | `server/app.ts` (`createApp`: routes, validation, error responses; also used by tests with fake providers) |
+| Copilot | `server/services/copilot-runner.ts` (run, catalog, quota), `copilot-runtime.ts` (security, timeout, connection, error codes) |
+| Claude | `server/services/claude.ts` (run, model listing, status, isolation, error codes) |
+| History & reports | `server/services/usage-history.ts`, `usage-report.ts`, `server/db/*.ts` |
+| Other services | `advisor.ts`, `licensing.ts`, `provider-comparison.ts`, `server/data/copilot-plans.ts` |
+| Demo mode (Vercel) | `server/demo/*.ts`, `api/[...slug].ts` — see [Vercel demo deployment](#vercel-demo-deployment) |
+| Frontend | `src/App.tsx`, `src/sections/*`, `src/components/*`, `src/content/*`, `src/lib/*` |
+| Tests | `tests/*.test.ts` (Node test runner; no real provider calls) |
 
-Yeni bir çalışma zamanı bağımlılığı eklenmedi. SQLite için Node'un yerleşik modülü kullanılıyor.
+## Technology stack
 
-## Gereksinimler
+- **Frontend:** React 19, TypeScript, Vite 8.
+- **Backend:** Express 5, Node.js (`>=22.13.0`), `node:sqlite` (built-in, experimental).
+- **Providers:** `@github/copilot-sdk` (GitHub Copilot CLI control), `@anthropic-ai/claude-agent-sdk` (Claude Code subprocess control).
+- **Config:** `dotenv`.
+- **Tooling:** ESLint, TypeScript project references (`tsc -b`), Node's built-in test runner.
 
-- **Node.js `>=22.13.0`** (yerleşik `node:sqlite` için; Node 24 önerilir) ve npm.
-- **GitHub Copilot erişimi:** Copilot SDK, makinede GitHub hesabınızla oturum açmış kullanıcıyı kullanır (`useLoggedInUser: true`). Copilot CLI ile oturum açmış olmanız gerekir. Kullanılabilir modeller ve özellikler planınıza ve kuruluş politikalarına bağlıdır. Copilot kullanılamazsa uygulama yine açılır ve durumu bildirir.
-- **Claude için (isteğe bağlı):** Anthropic Console API anahtarı ve Console hesabında kredi/faturalandırma (bkz. [Claude kullanımı](#claude-kullanımı-ve-olası-ücretler)).
+No new runtime dependency was introduced by this documentation/deployment pass; the demo mode reuses the same dependency-injection pattern already used by the test suite (`CopilotService` and `claudeQueryFn` injection points in `server/app.ts`).
 
-## Kurulum
+## Installation and local setup
+
+### Prerequisites
+
+- **Node.js `>=22.13.0`** (required for the built-in `node:sqlite` module; Node 24 recommended) and npm.
+- **GitHub Copilot access:** the Copilot SDK uses the GitHub account logged in on your machine (`useLoggedInUser: true`). You need to be logged in via the Copilot CLI. If Copilot is unavailable, the app still starts and reports its state; Copilot endpoints degrade gracefully.
+- **Claude (optional):** an Anthropic Console API key with credit/billing configured on the Console account (see [How Claude integration works](#how-claude-integration-works)).
+
+### Setup
 
 ```sh
-cd copilot-usage-dashboard
+git clone https://github.com/silassaatli/github-copilot-feature-usage-explorer.git
+cd github-copilot-feature-usage-explorer/copilot-usage-dashboard
 npm install
 cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
 ```
 
-Ardından `.env` dosyasını düzenleyin (bir sonraki bölüm) ve [çalıştırma](#çalıştırma-geliştirme-ve-production) adımına geçin.
+Then edit `.env` (see the next section) and continue to [Running the frontend and backend](#running-the-frontend-and-backend).
 
-## `.env` ve yapılandırma
+## Environment variables and configuration
 
-Sunucu, proje kökündeki `.env` dosyasını başlangıçta (`dotenv`) okur. Değişiklikten sonra sunucuyu yeniden başlatın. `.env.example` yalnızca boş değerler ve yorumlar içerir.
+The server reads `.env` at startup (via `dotenv`). Restart the server after changing it. `.env.example` contains only empty values and comments — never put a real key there.
 
-| Değişken | Varsayılan | Açıklama |
+| Variable | Default | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Claude için Anthropic Console API anahtarı (genellikle `sk-ant-api…`). Boşsa Claude "Yapılandırılmamış" görünür. OAuth (`sk-ant-oat…`) ve Admin (`sk-ant-admin…`) anahtarları reddedilir. |
-| `CLAUDE_AGENT_MODEL` | SDK varsayılanı | Arayüzde seçim yapılmadığında kullanılacak Claude modeli: takma ad (`haiku`, `sonnet`, `opus`, `fable`) veya tam kimlik. |
-| `CLAUDE_AGENT_EFFORT` | model varsayılanı | `low`, `medium`, `high`, `xhigh`, `max`. |
-| `CLAUDE_REQUEST_TIMEOUT_MS` | `120000` | Claude çalıştırma süre sınırı (1000–900000). |
-| `COPILOT_REQUEST_TIMEOUT_MS` | `120000` | Copilot çalıştırma süre sınırı (1000–900000). |
-| `PORT` | `3001` | API portu. Geliştirme proxy'si `3001`'i beklediği için değiştirirseniz `vite.config.ts`'i de güncelleyin. |
-| `DATABASE_PATH` | `data/explorer.sqlite` | SQLite dosyası. Klasör yoksa oluşturulur. |
-| `HISTORY_RETENTION` | `1000` | Saklanacak en fazla çalıştırma sayısı (10–100000). |
+| `ANTHROPIC_API_KEY` | — | Anthropic Console API key for Claude (usually `sk-ant-api…`). If empty, Claude shows as "Not configured". OAuth (`sk-ant-oat…`) and Admin (`sk-ant-admin…`) keys are rejected. |
+| `CLAUDE_AGENT_MODEL` | SDK default | Claude model used when none is selected in the UI: an alias (`haiku`, `sonnet`, `opus`, `fable`) or a full model id. |
+| `CLAUDE_AGENT_EFFORT` | model default | `low`, `medium`, `high`, `xhigh`, `max`. |
+| `CLAUDE_REQUEST_TIMEOUT_MS` | `120000` | Claude run timeout (1000–900000). |
+| `COPILOT_REQUEST_TIMEOUT_MS` | `120000` | Copilot run timeout (1000–900000). |
+| `PORT` | `3001` | API port. The dev proxy expects `3001`; update `vite.config.ts` if you change it. |
+| `DATABASE_PATH` | `data/explorer.sqlite` | SQLite file path. The folder is created if missing. |
+| `HISTORY_RETENTION` | `1000` | Maximum number of runs retained (10–100000). |
 
-## API anahtarlarının güvenli yönetimi
+No variable is required for Vercel's demo mode — see [Vercel demo deployment](#vercel-demo-deployment).
 
-- Anahtar **yalnızca sunucu tarafındaki `.env`** dosyasından okunur. Tarayıcıya, API yanıtlarına, sunucu günlüklerine ve veritabanına yazılmaz. Otomatik testler bunu sahte bir anahtarla doğrular.
-- `.env`, `.env.*` (`.env.example` hariç), `data/`, `*.sqlite*`, `node_modules/` ve `dist/` Git tarafından yok sayılır. Gerçek anahtarı commit etmeyin. Bir anahtar yanlışlıkla paylaşıldıysa Console'da iptal edip yenisini oluşturun.
-- Veritabanında Claude doğrulama durumu için anahtarın yalnızca **kısaltılmış SHA-256 özeti** tutulur. Bu özetten anahtar geri elde edilemez; anahtar değiştiğinde eski doğrulama geçersiz sayılır.
-- Claude alt sürecine üst süreçten gelen `CLAUDE_*` / `ANTHROPIC_*` değişkenleri (iç içe Claude Code oturumu işaretleri, OAuth token'ları, Bedrock/Vertex yönlendirmeleri) ve GitHub token'ları aktarılmaz. `CLAUDE_CONFIG_DIR` geçici bir dizine yönlendirildiği için makinedeki claude.ai oturumu ve `~/.claude` ayarları kullanılmaz. SDK'nın bildirdiği kimlik kaynağı `ANTHROPIC_API_KEY` değilse çalıştırma durdurulur (`CLAUDE_CREDENTIAL_SOURCE`).
+## Running the frontend and backend
 
-## Çalıştırma: geliştirme ve production
-
-| Komut | Ne yapar |
+| Command | What it does |
 |---|---|
-| `npm run dev` | API'yi (`127.0.0.1:3001`, dosya değişince yeniden başlar) ve Vite arayüzünü (`http://localhost:5173`) birlikte başlatır. Tarayıcıda **http://localhost:5173** adresini açın. |
-| `npm run build` | Ön yüz, sunucu ve testler için TypeScript kontrolü ve `dist/` altına production derlemesi. |
-| `npm run serve` | Derlenmiş arayüzü ve API'yi tek sunucudan yayınlar: **http://127.0.0.1:3001** (önce `npm run build`). |
-| `npm start` | Yalnızca API'yi başlatır (arayüz sunmaz). |
-| `npm run preview` | Vite önizleme sunucusu (yalnızca statik arayüz; API'yi ayrıca çalıştırın). |
+| `npm run dev` | Starts the API (`127.0.0.1:3001`, restarts on file changes) and the Vite frontend (`http://localhost:5173`) together. Open **http://localhost:5173**. |
+| `npm run build` | TypeScript checks for frontend, server and tests, plus a production build into `dist/`. |
+| `npm run serve` | Serves the built frontend and the API from one process: **http://127.0.0.1:3001** (run `npm run build` first). |
+| `npm start` | Starts only the API (no frontend). |
+| `npm run preview` | Vite preview server (static frontend only; run the API separately). |
 
-Sunucu `Ctrl+C` ile kapatılır. Geliştirme sunucusu `node --watch --import tsx` ile çalışır. `tsx watch`, Windows'ta `concurrently` altında Claude SDK yüklenirken sunucuyu kilitlediği için kullanılmıyor.
+Stop the server with `Ctrl+C`. The dev server runs with `node --watch --import tsx`; `tsx watch` is not used because it deadlocks the server while the Claude SDK loads under `concurrently` on Windows.
 
-## Vercel'de demo dağıtımı
+## How the Copilot SDK integration works
 
-Uygulama yerel bir GitHub hesabı oturumu (Copilot) ve kalıcı dosya sistemi (SQLite) gerektirdiği için, Vercel'in sunucusuz ortamında **gerçek** Copilot/Claude çağrıları ve kalıcı geçmişle çalışamaz. Bunun yerine `vercel.json` + `api/[...slug].ts`, **sahte sağlayıcılarla** (`server/demo/`) çalışan bir vitrin modu yayınlar:
+- Each session opens in an empty, temporary directory (`server/services/copilot-runtime.ts`).
+- The agent can only use the SDK's `BuiltInTools.Isolated` in-session tools (subagent, skill, task completion). File, shell, network and MCP tools are disabled.
+- Every permission request is denied automatically — there is no interactive approval flow.
+- When the run finishes, the session is closed with `disconnect` + `deleteSession` and the temporary directory is removed; a cleanup failure never masks the original error.
+- On timeout, or if the client disconnects before the response completes, `session.abort()` is called.
+- The model catalog (`/api/copilot/models`) comes from the account's and session's catalog; a session opens and closes just to read it, with no prompt sent. Some accounts/plans only expose `auto` — the UI states this explicitly rather than inventing named models. Requesting a model not in the account's catalog returns `UNSUPPORTED_MODEL`.
+- If the Copilot CLI cannot start, the app stays up in degraded mode: Copilot endpoints return `503 / COPILOT_UNAVAILABLE` and the server retries connecting after a cooldown. This never affects Claude's availability or the rest of the app.
 
-- `server/demo/fake-providers.ts`: gerçek hesap/anahtar gerektirmeyen, örnek metrikler üreten sahte Copilot servisi ve Claude `queryFn`'i (testlerdeki sahte sağlayıcılarla aynı desen, bkz. `tests/api.test.ts`).
-- `server/demo/create-demo-app.ts`: bu sahte sağlayıcılarla `createApp`'i kurar, geçmişi bellekte tutar (kalıcı değildir) ve `trustedHosts: 'any'` ile yerel-host kısıtlamasını kaldırır — gerçek bir anahtar/hesap olmadığı için bunun bir güvenlik riski yoktur.
-- `api/[...slug].ts`: tüm `/api/*` isteklerini tek bir Vercel fonksiyonunda bu demo app'e yönlendirir.
+## How Claude integration works
 
-Dağıtım: Vercel projesini bu dizine (`copilot-usage-dashboard`) kök (root) olarak işaret edip "Deploy" demeniz yeterli; `vercel.json` build komutunu (`npm run build`) ve çıkış dizinini (`dist`) zaten tanımlar. Ortam değişkeni veya API anahtarı gerekmez. Demo modunda her yanıtın başında/olaylarında "Demo modu" ibaresi bulunur ve üretilen veriler gerçek bir model çalıştırmasını temsil etmez.
+- Claude runs are made through `@anthropic-ai/claude-agent-sdk`, which spawns a local Claude Code subprocess per run.
+- Authentication is **exclusively** the `ANTHROPIC_API_KEY` from your server-side `.env` file. The server inspects the SDK's reported `apiKeySource` for each run and aborts (`CLAUDE_CREDENTIAL_SOURCE`) if the subprocess ends up authenticated by anything else (e.g. a pre-existing `claude.ai` session or inherited CLI credentials) — `CLAUDE_CONFIG_DIR` is redirected to a temporary directory specifically to prevent your machine's own `~/.claude` session from being picked up. Parent-process `CLAUDE_*`/`ANTHROPIC_*` environment variables and GitHub tokens are stripped before the subprocess starts.
+- The session runs tool-less (`tools: []`), single-turn, non-persistent, in an isolated temporary working directory. Timeout and cancellation are enforced with an `AbortController`.
+- Model listing (`/api/claude/models`) opens an idle session (no prompt sent) purely to call the SDK's `supportedModels()`, and caches the result for 10 minutes.
+- **The default model can be expensive.** The SDK's `default` alias may resolve to an Opus-class model. The UI flags this and suggests a lower-cost model (e.g. Haiku) for demo purposes; the application never silently substitutes a model for you.
+- Connection states exposed via `/api/claude/status`: `missing_key`, `invalid_key_format`, `sdk_unavailable`, `unverified` (key present, not yet exercised), `verified` (a real run with this exact key succeeded), `auth_failed` / `error` (the last real run failed). Only a successful real run counts as "verified" — the mere presence of a key does not.
 
-Gerçek sağlayıcı çağrılarıyla bir cloud dağıtımı isterseniz mimarinin değişmesi gerekir (Copilot SDK'nın yerel oturum gereksinimi çözülemeyebilir; Claude için API anahtarı tabanlı ayrı bir backend; kalıcılık için harici bir veritabanı).
+## Usage metrics, token accounting and AI credit limitations
 
-## Ücretsiz yerel testler
+| Value | Source | Meaning |
+|---|---|---|
+| Tokens, model/turn calls, duration, actually-used model | Provider SDK | **Real measurement.** If the provider does not report a value, it is shown as "Unknown" and excluded from totals (never assumed to be zero). Reports state, per metric, how many successful runs reported it. |
+| **AI Credits** (Copilot) | Copilot SDK `totalNanoAiu` (10⁹ nano-AIU = 1 AI Credit) | **SDK-measured consumption.** Not a currency. |
+| **Estimated cost (USD)** (Claude) | Claude Agent SDK `total_cost_usd` | **Estimate**, computed from the SDK's price table — not an invoice. The real amount is in Anthropic Console → Usage/Billing. |
+| License calculator | `server/data/copilot-plans.ts` (manually entered from GitHub's docs, with a last-verified date) plus your own inputs | **Estimate.** Seat price, included credits and expected usage are editable; every result states whether each figure came from plan data or from your input. |
+| Copilot quota | Experimental SDK account RPC | **Point-in-time value**, fetched on request; not continuously monitored or historized. |
 
-| Komut | Kapsam |
+AI Credits and USD are never converted into one another or summed. This application never displays your real invoice amount.
+
+## Security considerations
+
+- **Local-only access:** the API only listens on `127.0.0.1`. A request is rejected with `403` if its `Host` header (or, when present, its `Origin` header) is not local — this stops another website (via DNS rebinding or a cross-origin form submission) from triggering a billable model call without your knowledge. (This check is disabled in the public [Vercel demo mode](#vercel-demo-deployment), which uses fake providers and incurs no cost.)
+- **Copilot sessions:** opened in an empty temporary directory; restricted to isolated, tool-less in-session capabilities; every permission request denied; closed and cleaned up after each run, even on error; aborted on timeout or client disconnect.
+- **Claude sessions:** tool-less, single-turn, non-persistent, isolated working directory and environment; timeout/cancellation via `AbortController`.
+- **Provider independence:** a Copilot or Claude failure never affects the other provider's result, the history record, or the rest of the app.
+- **Error responses:** shaped as `{ error, code, setupHint? }` with a fixed set of codes (`COPILOT_AUTH_REQUIRED`, `COPILOT_RATE_LIMITED`, `COPILOT_TIMEOUT`, `SESSION_LIMIT_REACHED`, `CLAUDE_NOT_CONFIGURED`, `CLAUDE_AUTH_FAILED`, `CLAUDE_BILLING`, `CLAUDE_RATE_LIMITED`, `REQUEST_CANCELLED`, `FORBIDDEN_ORIGIN`, `CONFIRMATION_REQUIRED`, `NOT_FOUND`, `INVALID_JSON`, etc.). Raw SDK messages, file paths and request ids are never sent to the client. Failed runs are recorded in history with their error code.
+- **API key handling:** the key is read only from the server-side `.env`. It is never written to the browser, API responses, server logs, or the database. Only a truncated SHA-256 fingerprint of the key is stored, to track verification state — the key itself cannot be recovered from it.
+
+## API endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/health` | API, Copilot (starting / connected / not logged in / unavailable), Claude and database status |
+| GET | `/api/copilot/models` | Copilot model catalog, `scope: auto-only \| named`, and auto-routing tiers |
+| GET | `/api/copilot/quota` | Point-in-time quota (experimental SDK RPC) |
+| POST | `/api/copilot/chat` | Run on Copilot (`prompt`, `model`, `autoTier`, `strategy`, `maxAiCreditLimit`) |
+| POST | `/api/copilot/fleet` | Experimental Fleet run |
+| GET | `/api/claude/status` | Claude connection status (never includes the key value) |
+| GET | `/api/claude/models` | Claude Agent SDK model list (`?refresh=1`); makes no model call |
+| POST | `/api/claude/chat` | Run on Claude (`prompt`, `claudeModel`) |
+| POST | `/api/compare` | Runs selected providers independently (`providers`, plus Copilot/Claude model selection) and returns a common-metric summary |
+| GET | `/api/usage/history` | History (`?provider=github-copilot\|claude`, `?status=success\|error`, `?limit=` up to 200); includes `storage`, `persistent`, `total` |
+| DELETE | `/api/usage/history` | Clears all history; requires body `{ "confirm": true }` |
+| GET | `/api/usage/summary` | Per-provider report derived from recorded history |
+| POST | `/api/advisor/recommend` | Rule-based mode recommendation |
+| GET | `/api/licensing/plans` | Plan data, sources and last-verified date |
+| POST | `/api/licensing/calculate` | License/cost calculation (`plan`, `seats`, `expectedCreditsPerSeat`, optional `includedCreditsPerSeat`, `seatPriceUsd`) |
+
+All of the above are implemented identically in the production server (`server/app.ts`) and in the Vercel demo deployment — the demo substitutes fake providers behind the same routes, it does not expose a different API surface.
+
+## Vercel demo deployment
+
+The real application requires a GitHub account already logged in via the Copilot CLI on the host machine, and a writable, persistent filesystem for SQLite history. Neither assumption holds on Vercel's serverless runtime, so **this project is not deployed to Vercel in its real-provider configuration.** Instead, `vercel.json` and `api/[...slug].ts` publish a **demo mode** that exercises the exact same API surface against fake, in-process providers.
+
+### What demo mode is
+
+- `server/demo/fake-providers.ts` implements the same `CopilotService` interface and Claude `queryFn` injection point that the test suite already uses to avoid real provider calls (see `tests/api.test.ts`). It requires no API key and no Copilot/GitHub login, and makes no network call to GitHub or Anthropic.
+- `server/demo/create-demo-app.ts` builds the Express app (`createApp` from `server/app.ts`) with these fake providers, an in-memory history store (`persistent: false` — it resets on every cold start/redeploy), and `trustedHosts: 'any'`, which lifts the local-only `Host`/`Origin` restriction. Lifting that restriction is safe here specifically because there is no real key or account behind it to abuse.
+- `api/[...slug].ts` is a single Vercel serverless function that forwards every `/api/*` request to this demo Express app.
+- Every demo response is explicitly labeled: health messages state "Demo mode: fake Copilot provider (no real account used)" and "Demo mode: history is kept in memory, not persistent", and every generated run response is prefixed `[Demo]` and states it is not a real model reply.
+
+**Demo responses must not be read as real Copilot or Claude usage, cost, or performance data.** They are fixed, synthetic numbers meant only to exercise the UI end to end.
+
+### Supported endpoints in demo mode
+
+Every endpoint listed in [API endpoints](#api-endpoints) responds in demo mode, backed by fake data instead of a real provider:
+
+- `/api/health`, `/api/copilot/models`, `/api/copilot/quota`, `/api/copilot/chat`, `/api/copilot/fleet` — served by the fake Copilot service.
+- `/api/claude/status`, `/api/claude/models`, `/api/claude/chat` — served by the fake Claude `queryFn`.
+- `/api/compare` — runs both fake providers independently and returns the same comparison summary shape as production.
+- `/api/usage/history`, `/api/usage/summary`, `/api/advisor/recommend`, `/api/licensing/plans`, `/api/licensing/calculate` — unchanged; history is just in-memory instead of SQLite.
+
+### Deployment steps
+
+1. Push this repository to GitHub (already required for a Vercel import).
+2. In the Vercel dashboard: **Add New → Project**, select this repository.
+3. Set **Root Directory** to `copilot-usage-dashboard` (the app lives in this subdirectory, not the repo root).
+4. Leave the framework preset as "Other" — `vercel.json` already declares `buildCommand: npm run build` and `outputDirectory: dist`.
+5. No environment variables are required or used by demo mode.
+6. Deploy.
+
+### Limitations of demo mode
+
+- **No real provider is exercised.** No actual Copilot or Claude usage, latency, model routing, or cost is measured — all numbers are fixed, synthetic values set in `server/demo/fake-providers.ts`.
+- **History does not persist.** It is held in the serverless function's memory and is lost on every cold start or redeploy.
+- **The local-origin security check is disabled.** This is intentional and limited to the fake-provider path — there is no real key or billable account reachable through it, so there is nothing for a third-party site to abuse.
+- **This deployment has not been verified against a live Vercel project in this change.** Local verification is described in [Testing and build verification](#testing-and-build-verification); an actual Vercel deployment must be performed and confirmed by whoever has access to the target Vercel account (see the final report accompanying this change for exactly what was and was not verified).
+
+If a deployment with **real** provider calls is required, the architecture needs to change: Copilot's local-login requirement may not be solvable in a serverless context at all, Claude would need a key-based backend reachable from a server environment, and history would need an external database (e.g. Vercel Postgres, Supabase) instead of local SQLite.
+
+## Testing and build verification
+
+| Command | Scope |
 |---|---|
-| `npm run test:unit` | 74 otomatik test: API uç noktaları (geçerli/hatalı istekler, model seçiminin aktarımı, sağlık durumu, sağlayıcı hatalarının bağımsızlığı, geçmiş filtreleme/silme, rapor, yerel erişim koruması, veritabanı olmadan başlatma, production statik sunum, anahtarın yanıt ve günlüklere düşmemesi), Copilot oturum güvenliği, Claude entegrasyonu, SQLite geçişleri ve kalıcılık, rapor, lisans, danışman. |
-| `npm run typecheck` | Ön yüz, sunucu, testler ve betikler için TypeScript kontrolü. |
+| `npm run test:unit` | 74 automated tests: API endpoints (valid/invalid requests, model-selection passthrough, health, provider-error isolation, history filtering/deletion, reports, local-access guard, startup without a database, production static serving, key never appearing in responses/logs), Copilot session security, Claude integration, SQLite migrations and persistence, reports, licensing, advisor. |
+| `npm run typecheck` | TypeScript checks for frontend, server, tests and scripts. |
 | `npm run lint` | ESLint. |
-| `npm run build` | Production derlemesi. |
+| `npm run build` | Production build. |
 
-Bu testler **ağ çağrısı yapmaz ve API anahtarı gerektirmez**. Copilot ve Claude, sahte servis ve sahte SDK sorgularıyla test edilir.
+These tests make **no network call and require no API key** — Copilot and Claude are exercised through fake services and a fake SDK query function, the same pattern the Vercel demo mode reuses.
 
-> ⚠️ `npm run test:copilot-sdk`, gerçek bir Copilot oturumu açıp mesaj gönderir ve **Copilot kullanımı (AI Credit) tüketir**. Otomatik test paketinin parçası değildir; yalnızca bilerek çalıştırın. Gerçek Claude çağrısı yapan otomatik test yoktur.
+> ⚠️ `npm run test:copilot-sdk` opens a real Copilot session and sends a message — it **consumes real Copilot usage (AI Credits)**. It is not part of the automated test suite and should only be run deliberately. There is no automated test that makes a real Claude call.
 
-## SQLite geçmişi, yedekleme ve sıfırlama
+As part of preparing this documentation/deployment change, the following were run and passed locally: `npm run test:unit` (74/74 passing), `npx tsc -p tsconfig.server.json` (no errors), `npm run lint` (no issues), and `npm run build` (succeeds, produces `dist/`). The demo app was also exercised directly with a non-localhost `Host` header against `/api/health` and `/api/compare`, confirming both endpoints respond `200` with clearly demo-labeled data.
 
-- **Konum:** varsayılan olarak `copilot-usage-dashboard/data/explorer.sqlite`. WAL kipi nedeniyle yanında `explorer.sqlite-wal` ve `explorer.sqlite-shm` dosyaları da bulunabilir. Konumu `DATABASE_PATH` ile değiştirebilirsiniz.
-- **Ne saklanır:** sağlayıcı, strateji, durum ve hata kodu, istenen ve gerçek model, token değerleri, süre, tur/model/araç çağrısı sayıları, AI Credit veya USD tahmini (birimiyle ayrı), bağlam kullanımı, olay zaman çizelgesi ve en fazla 80 karakterlik görev etiketi.
-- **Ne saklanmaz:** tam istem, tam yanıt, API anahtarı ve ortam değişkenleri.
-- **Tablolar:**
-  - `executions`: çalıştırma başına bir kayıt
-  - `model_usage`: Copilot model kırılımı
-  - `execution_events`: olay zaman çizelgesi
-  - `provider_verifications`: Claude doğrulama durumu (anahtar özetiyle)
-  - `schema_migrations`: uygulanmış şema sürümleri
+## Troubleshooting
 
-  Geçişler başlangıçta transaction içinde otomatik uygulanır.
-- **Saklama:** en yeni `HISTORY_RETENTION` (varsayılan 1000) kayıt tutulur; eskileri bağlı satırlarıyla birlikte silinir.
-- **Arayüzden temizleme:** Kullanım Analizi → *Geçmişi temizle* → onay. API düzeyinde `DELETE /api/usage/history` isteği `{ "confirm": true }` gövdesi olmadan reddedilir.
-- **Yedekleme:** sunucuyu durdurun ve `data/` klasörünü (üç dosya birlikte) kopyalayın. Sunucu çalışırken yedek almak isterseniz `sqlite3 data/explorer.sqlite ".backup yedek.sqlite"` komutunu kullanın (sqlite3 aracı gerekir).
-- **Sıfırlama:** sunucuyu durdurup `data/` klasörünü silin. İlk başlatmada şema yeniden oluşturulur.
-- **Veritabanı açılamazsa** (izin, kilit, bozuk yol) sunucu kapanmaz. Geçmiş bellekte tutulur ve yeniden başlatmada kaybolur. Kenar çubuğu ve sayfanın üstü "Kullanım geçmişi kalıcı kaydedilemiyor" uyarısı gösterir; `/api/health` → `services.database.persistent` değeri `false` olur.
-- Node 24'te `node:sqlite` deneysel olarak işaretlidir ve başlangıçta bir `ExperimentalWarning` yazdırır; bu beklenen bir uyarıdır.
+- **"Copilot kullanılamıyor" / Copilot unavailable in the sidebar:** you are not logged in to the Copilot CLI on this machine, or your plan/policy does not grant access. Log in with the Copilot CLI and restart the server; the app runs in degraded mode in the meantime, with Copilot endpoints returning `503 / COPILOT_UNAVAILABLE`.
+- **Claude shows "Yapılandırılmamış" (not configured):** `ANTHROPIC_API_KEY` is missing from `.env`. Add it and restart the server.
+- **Claude shows "Anahtar türü uygun değil" (invalid key format):** you supplied an OAuth (`sk-ant-oat…`) or Admin (`sk-ant-admin…`) key. Only an API key (`sk-ant-api…`) from Anthropic Console → API Keys works here.
+- **Claude run fails with `CLAUDE_CREDENTIAL_SOURCE`:** the Claude Code subprocess authenticated with something other than your `.env` key (e.g. a pre-existing local `claude.ai` session). This is enforced intentionally; check that no other `CLAUDE_*`/`ANTHROPIC_*` credentials are being inherited from your shell.
+- **`ExperimentalWarning: SQLite is an experimental feature`** at startup: expected on Node 24 — `node:sqlite` is still flagged experimental upstream. It does not indicate a problem.
+- **Dev server hangs or the API process seems stuck on Windows:** this is why `dev:server` uses `node --watch --import tsx` instead of `tsx watch` — the latter was observed to deadlock the server while the Claude SDK loads under `concurrently` on Windows. If you changed this, revert to the documented script.
+- **Port already in use:** another process is bound to `3001` (or your configured `PORT`). Stop it, or set a different `PORT` in `.env` and update the proxy target in `vite.config.ts` to match.
+- **`UNSUPPORTED_MODEL` from `/api/copilot/chat`:** the requested model is not in your account's catalog (some accounts/plans only expose `auto`). Check `/api/copilot/models` for what is actually available to you.
+- **Database cannot be opened (permission, lock, corrupt path):** the server does not crash; history falls back to an in-memory store that is lost on restart, and `/api/health` reports `services.database.persistent: false`.
 
-## Gerçek ölçümler ve tahminler
+## Known limitations and future improvements
 
-| Değer | Kaynak | Anlamı |
-|---|---|---|
-| Token, model/tur çağrısı, süre, gerçekte kullanılan model | Sağlayıcı SDK'sı | **Gerçek ölçüm.** Sağlayıcı bir değeri bildirmezse "Bilinmiyor" gösterilir ve toplamlara sıfır olarak eklenmez. Raporlarda her metrik için "X / Y başarılı çalıştırmada bildirildi" yazar. |
-| **AI Credit** (Copilot) | Copilot SDK `totalNanoAiu` (10⁹ nano-AIU = 1 AI Credit) | **SDK'nın ölçtüğü tüketim.** Para birimi değildir. |
-| **Tahmini maliyet (USD)** (Claude) | Claude Agent SDK `total_cost_usd` | **Tahmin.** SDK'nın fiyat tablosuyla hesaplanır, fatura değildir. Gerçek tutar Anthropic Console > Usage/Billing sayfasındadır. |
-| Lisans hesaplayıcısı | `server/data/copilot-plans.ts` (GitHub belgelerinden elle girilmiş, son doğrulama tarihiyle) ve sizin girdileriniz | **Tahmin.** Koltuk fiyatı, dahil krediler ve beklenen kullanım düzenlenebilir. Sonuçta her değerin kaynağı (plan verisi / sizin değeriniz) belirtilir. |
-| Copilot kotası | Deneysel SDK hesap RPC'si | **Anlık değer.** İstek anında alınır; gerçek zamanlı izleme yapılmaz. |
+This list mirrors the application's own **Reports & Backlog** section (`src/content/backlog.ts`); it is a usage/improvement backlog, not a separate project-management system.
 
-AI Credit ile USD birbirine **dönüştürülmez ve toplanmaz.** Karşılaştırma özetinde ve raporlarda ayrı birimlerle gösterilir. Bu uygulamada gerçek fatura tutarı gösterilmez.
+**Completed**
+- Running Copilot and Claude side by side, independently, with a common-metric comparison.
+- Showing only metrics the provider actually reported — unknown values are never treated as zero.
+- Real Copilot and Claude model selection from live endpoints, passed through to the backend request.
+- Persistent, filterable, drillable, confirm-to-clear history in SQLite; reports derived from recorded data.
+- Secured sessions (temporary directory, tool restriction, permission denial), timeout and cancellation, isolated Claude subprocess, local-access guard.
+- Resilient startup and explicit status reporting even when Copilot or the database is unavailable.
 
-## Copilot model kataloğu sınırlamaları
+**Known limitations**
+- The Copilot model catalog depends on the account; some accounts only expose `auto`.
+- Claude's cost is an SDK estimate; the real invoice is in Anthropic Console.
+- Plan prices and credit allowances are manually entered from vendor docs (with a `lastVerified` date) and may have changed since.
+- Quota is a point-in-time value from an experimental RPC; no history is kept for it.
+- Fleet, the quota RPC, and `node:sqlite` are all experimental components.
+- Per-model token breakdown for Claude is not yet written to the `model_usage` table.
+- Built for local, single-user use; there is no multi-user authentication.
+- No automated component tests for the frontend. The UI was verified through the build, the API test suite, and manual checks at desktop and 390px mobile widths.
+- The Vercel demo mode (added in this change) has not been verified against a live Vercel deployment — only locally, against the same Express app the deployment uses.
 
-- Model listesi hesabın kataloğundan ve oturum kataloğundan gelir (`/api/copilot/models`). Liste alınırken bir Copilot oturumu açılıp kapatılır; modele mesaj gönderilmez.
-- Bazı hesaplar/planlar **yalnızca Otomatik (`auto`)** seçeneğini sunar. Bu durumda arayüz bunu açıkça yazar ve başka model göstermez. Modeli Copilot çalışma zamanı seçer; gerçekte kullanılan model sonuç kartında gösterilir. Uygulama desteklenmeyen modelleri uydurmaz. Sunucu, hesapta olmayan bir model istenirse `UNSUPPORTED_MODEL` döndürür.
-- Politika nedeniyle kapalı modeller seçilemez. Katalog çarpan (multiplier) bildiriyorsa gösterilir; token fiyatı sabitlenmez.
-- Otomatik yönlendirme profilleri yalnızca hesap sunuyorsa listelenir.
+**Suggested next steps**
+- Time-series charts from real historical measurements.
+- Recording Claude's per-model token breakdown.
+- Exporting history and reports as CSV/JSON.
+- Historizing optional quota snapshots using the existing migration mechanism.
+- A periodic check comparing plan prices against their source documents.
+- Frontend component tests (requires an additional dependency).
+- Verifying the Vercel demo deployment end to end against a live project, and capturing the pending screenshots listed in [Screenshots](#screenshots).
 
-## Claude kullanımı ve olası ücretler
+## License
 
-- Claude çağrıları **Anthropic API (Console) hesabından, kullanılan modelin token fiyatına göre ücretlendirilir.** Claude Pro/Max aboneliği veya Claude Code erişimi bu API kullanımını kapsamaz ya da ücretsiz yapmaz. Console hesabında kredi bakiyesi veya faturalandırma tanımlı olmalıdır.
-- Model listesi `/api/claude/models` uç noktasından gelir. Bu uç nokta kurulu Agent SDK'nın `supportedModels()` sonucunu, modele mesaj göndermeden alır ve 10 dakika önbellekte tutar.
-- **Varsayılan model yüksek maliyetli olabilir.** SDK varsayılanı (`default`) bir Opus sınıfı modele çözümlenebilir. Arayüz bunu belirtir ve demo için daha düşük maliyetli bir model (ör. Haiku) seçebileceğinizi hatırlatır. Uygulama modeli kendiliğinden değiştirmez.
-- Claude Code çalışma zamanı kendi sistem talimatını eklediği için kısa bir istem bile birkaç yüz girdi tokenı kullanabilir.
-- Maliyeti sınırlamak için Console'da çalışma alanı harcama limiti tanımlamanız önerilir. İptal veya zaman aşımında çalıştırma durdurulur, ancak o ana kadar üretilen tokenlar ücretlendirilebilir.
-- **Bağlantı durumları:**
-  - `missing_key`: yapılandırılmamış
-  - `invalid_key_format`: anahtar türü uygun değil
-  - `sdk_unavailable`: Agent SDK kullanılamıyor
-  - `unverified`: anahtar var ama doğrulanmadı
-  - `verified`: aynı anahtarla gerçek bir çalıştırma başarılı oldu
-  - `auth_failed` / `error`: son gerçek çalıştırma başarısız oldu
-
-  Yalnızca anahtarın varlığı "doğrulandı" sayılmaz.
-
-## Güvenlik ve hata yönetimi
-
-- **Yerel erişim:** API yalnızca `127.0.0.1` üzerinde dinler. `Host` başlığı ve (varsa) `Origin` başlığı yerel değilse istek `403` ile reddedilir. Böylece başka bir web sitesi (DNS rebinding veya çapraz kaynak form gönderimiyle) kullanıcıdan habersiz model çağrısı başlatamaz.
-- **Copilot oturumları:**
-  - Her oturum boş, geçici bir dizinde açılır.
-  - Ana ajan yalnızca SDK'nın `BuiltInTools.Isolated` kümesindeki oturum içi araçları kullanabilir (alt ajan, skill, görev tamamlama). Dosya, shell, ağ ve MCP araçları kapalıdır.
-  - İzin gerektiren her istek reddedilir.
-  - İşlem bitince oturum `disconnect` + `deleteSession` ile kapatılır ve geçici dizin silinir. Temizlik hatası asıl hatayı örtmez.
-  - Süre aşımında veya istemci bağlantıyı kapattığında `session.abort()` çağrılır.
-- **Claude oturumları:** Claude araçsız (`tools: []`), tek turlu, kalıcı olmayan oturumla, geçici çalışma dizininde ve yalıtılmış ortamda çalışır. Süre aşımı veya iptal `abortController` ile uygulanır.
-- **Sağlayıcı bağımsızlığı:** Copilot veya Claude'un hatası diğerinin sonucunu, geçmiş kaydını ya da uygulamanın geri kalanını etkilemez. Copilot CLI başlatılamazsa API çalışmaya devam eder; Copilot uç noktaları `503 / COPILOT_UNAVAILABLE` döndürür ve 30 saniye bekledikten sonra yeniden bağlanmayı dener.
-- **Hata yanıtları:** `{ error, code, setupHint? }` biçimindedir. Kodlar sabittir: `COPILOT_AUTH_REQUIRED`, `COPILOT_RATE_LIMITED`, `COPILOT_TIMEOUT`, `SESSION_LIMIT_REACHED`, `CLAUDE_NOT_CONFIGURED`, `CLAUDE_AUTH_FAILED`, `CLAUDE_BILLING`, `CLAUDE_RATE_LIMITED`, `REQUEST_CANCELLED`, `FORBIDDEN_ORIGIN`, `CONFIRMATION_REQUIRED`, `NOT_FOUND`, `INVALID_JSON` vb. Ham SDK mesajları, dosya yolları ve istek kimlikleri kullanıcıya gönderilmez. Başarısız çalıştırmalar hata koduyla birlikte geçmişe kaydedilir.
-
-## API uç noktaları
-
-| Yöntem | Uç nokta | Açıklama |
-|---|---|---|
-| GET | `/api/health` | API, Copilot (başlatılıyor / bağlı / oturum açılmamış / kullanılamıyor), Claude ve veritabanı durumu |
-| GET | `/api/copilot/models` | Copilot model kataloğu, `scope: auto-only \| named` ve otomatik yönlendirme profilleri |
-| GET | `/api/copilot/quota` | Anlık kota (deneysel SDK RPC'si) |
-| POST | `/api/copilot/chat` | Copilot çalıştırması (`prompt`, `model`, `autoTier`, `strategy`, `maxAiCreditLimit`) |
-| POST | `/api/copilot/fleet` | Deneysel Fleet çalıştırması |
-| GET | `/api/claude/status` | Claude bağlantı durumu (anahtar değeri olmadan) |
-| GET | `/api/claude/models` | Claude Agent SDK model listesi (`?refresh=1`); model çağrısı yapmaz |
-| POST | `/api/claude/chat` | Claude çalıştırması (`prompt`, `claudeModel`) |
-| POST | `/api/compare` | Sağlayıcıları bağımsız çalıştırır (`providers`, Copilot ve Claude model seçimleri) ve ortak metrik özetini döndürür |
-| GET | `/api/usage/history` | Geçmiş (`?provider=github-copilot\|claude`, `?status=success\|error`, `?limit=` en fazla 200); `storage`, `persistent`, `total` içerir |
-| DELETE | `/api/usage/history` | Tüm geçmişi siler; gövde `{ "confirm": true }` zorunlu |
-| GET | `/api/usage/summary` | Kayıtlı geçmişten sağlayıcı raporu ve gözlemler |
-| POST | `/api/advisor/recommend` | Kural tabanlı mod önerisi |
-| GET | `/api/licensing/plans` | Plan verisi, kaynaklar ve son doğrulama tarihi |
-| POST | `/api/licensing/calculate` | Lisans/maliyet hesabı (`plan`, `seats`, `expectedCreditsPerSeat`, isteğe bağlı `includedCreditsPerSeat`, `seatPriceUsd`) |
-
-## Bilinen sınırlamalar ve backlog
-
-Bu backlog, kullanım analizi ve iyileştirme backlog'udur; ayrı bir proje yönetim sistemi değildir. Aynı içerik uygulamadaki **Raporlar ve Backlog** bölümünde de yer alır (`src/content/backlog.ts`).
-
-**Tamamlananlar**
-- Copilot ve Claude'u yan yana, birbirinden bağımsız çalıştırma ve ortak metrik karşılaştırması.
-- Yalnızca sağlayıcının bildirdiği gerçek metriklerin gösterilmesi; bilinmeyen değerlerin sıfır sayılmaması.
-- Gerçek uç noktalardan Copilot ve Claude model seçimi; seçimin backend isteğine aktarılması.
-- SQLite ile kalıcı, filtrelenebilir, ayrıntısı açılabilir ve onayla temizlenebilir geçmiş; kayıtlı veriden rapor.
-- Güvenli oturumlar (geçici dizin, araç kısıtlaması, izin reddi), zaman aşımı ve iptal, yalıtılmış Claude alt süreci, yerel erişim koruması.
-- Copilot veya veritabanı kullanılamasa da dayanıklı başlatma ve açık durum bildirimi.
-
-**Bilinen sınırlamalar**
-- Copilot model kataloğu hesaba bağlıdır; bazı hesaplar yalnızca `auto` sunar.
-- Claude maliyeti SDK tahminidir; gerçek fatura Anthropic Console'dadır.
-- Plan fiyatları ve kredi tahsisatları belgeden elle girilmiştir (`lastVerified` tarihi) ve değişmiş olabilir.
-- Kota bilgisi deneysel bir RPC'den anlık alınır; tarihçesi tutulmaz.
-- Fleet, kota RPC'si ve `node:sqlite` deneysel bileşenlerdir.
-- Claude için model başına token kırılımı henüz `model_usage` tablosuna yazılmıyor.
-- Yerel tek kullanıcı içindir; çok kullanıcılı kimlik doğrulama yoktur.
-- Ön yüz için otomatik bileşen testleri yoktur. Arayüz; derleme, API testleri ve tarayıcıda masaüstü/390 px mobil kontrolüyle doğrulandı.
-
-**Sonraki geliştirme önerileri**
-- Geçmişteki gerçek ölçümlerden zaman serisi grafikleri.
-- Claude model kırılımını kaydetmek.
-- Geçmiş ve raporları CSV/JSON olarak dışa aktarma.
-- İsteğe bağlı kota anlık görüntülerini mevcut migration düzeniyle tarihçeli saklamak.
-- Plan fiyatlarını kaynak belgelerle periyodik olarak karşılaştıran bir kontrol listesi.
-- Ön yüz bileşen testleri (ek bağımlılık gerektirir).
+This repository does not currently include a license file. Until one is added, no reuse rights beyond GitHub's Terms of Service are granted. Open an issue or contact the repository owner if you need to use this code under a specific license.

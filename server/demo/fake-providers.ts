@@ -147,7 +147,7 @@ export function createFakeClaudeQueryFn(): ClaudeQueryFn {
         duration_ms: 700,
         total_cost_usd: 0.0021,
         stop_reason: 'end_turn',
-        result: 'demo',
+        result: `[Demo] Claude bu görevi tamamladı. Bu, gerçek bir model yanıtı değil; örnek bir vitrin çıktısıdır. (İstem: "${promptText.slice(0, 60)}")`,
         usage: {},
         modelUsage: {
           [model]: {
