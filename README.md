@@ -2,8 +2,6 @@
 
 A local, single-user dashboard that runs the **same task** through the **GitHub Copilot SDK** and the **Claude Agent SDK**, side by side, and shows the usage metrics each provider actually reports — model, tokens, duration, AI Credits, and an estimated Claude cost in USD.
 
-The application's interface is in Turkish (it was built for a Turkish-speaking audience); this documentation is in English.
-
 ![Technology stack badges](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff)
 ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=fff)
