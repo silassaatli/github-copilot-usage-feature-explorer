@@ -19,23 +19,22 @@ The application's interface is in Turkish (it was built for a Turkish-speaking a
 1. [Application overview](#application-overview)
 2. [Problem statement and objectives](#problem-statement-and-objectives)
 3. [Key features](#key-features)
-4. [Screenshots](#screenshots)
-5. [Application sections explained](#application-sections-explained)
-6. [Architecture and request lifecycle](#architecture-and-request-lifecycle)
-7. [Technology stack](#technology-stack)
-8. [Installation and local setup](#installation-and-local-setup)
-9. [Environment variables and configuration](#environment-variables-and-configuration)
-10. [Running the frontend and backend](#running-the-frontend-and-backend)
-11. [How the Copilot SDK integration works](#how-the-copilot-sdk-integration-works)
-12. [How Claude integration works](#how-claude-integration-works)
-13. [Usage metrics, token accounting and AI credit limitations](#usage-metrics-token-accounting-and-ai-credit-limitations)
-14. [Security considerations](#security-considerations)
-15. [API endpoints](#api-endpoints)
-16. [Vercel demo deployment](#vercel-demo-deployment)
-17. [Testing and build verification](#testing-and-build-verification)
-18. [Troubleshooting](#troubleshooting)
-19. [Known limitations and future improvements](#known-limitations-and-future-improvements)
-20. [License](#license)
+4. [Application sections explained](#application-sections-explained)
+5. [Architecture and request lifecycle](#architecture-and-request-lifecycle)
+6. [Technology stack](#technology-stack)
+7. [Installation and local setup](#installation-and-local-setup)
+8. [Environment variables and configuration](#environment-variables-and-configuration)
+9. [Running the frontend and backend](#running-the-frontend-and-backend)
+10. [How the Copilot SDK integration works](#how-the-copilot-sdk-integration-works)
+11. [How Claude integration works](#how-claude-integration-works)
+12. [Usage metrics, token accounting and AI credit limitations](#usage-metrics-token-accounting-and-ai-credit-limitations)
+13. [Security considerations](#security-considerations)
+14. [API endpoints](#api-endpoints)
+15. [Vercel demo deployment](#vercel-demo-deployment)
+16. [Testing and build verification](#testing-and-build-verification)
+17. [Troubleshooting](#troubleshooting)
+18. [Known limitations and future improvements](#known-limitations-and-future-improvements)
+19. [License](#license)
 
 ## Application overview
 
@@ -65,19 +64,6 @@ It is **not** a production multi-tenant product, a billing dashboard, or a bench
 | **Feature Guide** | Explains Chat, Agent Mode, Skills, subagents, Fleet, MCP, Hooks, session limits and model selection | Informational |
 
 Every section and card in the UI carries an explicit label for its data type: *real measurement*, *estimate*, *example/assumption*, *rule-based*, or *informational*. The sidebar reads the real `/api/health` response every 30 seconds to show Copilot, Claude and database status.
-
-
-| File | Section it should capture |
-|---|---|
-| `docs/images/application-overview.png` | Full-page view of the Playground with the sidebar visible |
-| `docs/images/playground.png` | A prompt submitted, a provider/strategy selected, and a completed result card |
-| `docs/images/usage-analytics.png` | A run's token/duration/model-call breakdown and the history table |
-| `docs/images/model-advisor.png` | The advisor questionnaire and a generated recommendation with its explanation |
-| `docs/images/comparison-lab.png` | A side-by-side Copilot vs. Claude (or strategy vs. strategy) comparison table |
-| `docs/images/licensing-cost.png` | A license/cost calculation with its inputs and derived result |
-| `docs/images/feature-guide.png` | The feature guide cards (Chat, Agent Mode, Skills, Fleet, MCP, Hooks, …) |
-
-To add them: run the app locally (`npm run dev`), navigate to each section listed above, capture a screenshot with non-sensitive example data (no real API keys, account names, or billing details visible)
 
 ## Application sections explained
 
@@ -195,6 +181,7 @@ No new runtime dependency was introduced by this documentation/deployment pass; 
 
 - **Node.js `>=22.13.0`** (required for the built-in `node:sqlite` module; Node 24 recommended) and npm.
 - **GitHub Copilot access:** the Copilot SDK uses the GitHub account logged in on your machine (`useLoggedInUser: true`). You need to be logged in via the Copilot CLI. If Copilot is unavailable, the app still starts and reports its state; Copilot endpoints degrade gracefully.
+- **Claude (optional):** an Anthropic Console API key with credit/billing configured on the Console account (see [How Claude integration works](#how-claude-integration-works)).
 
 ### Setup
 
@@ -320,6 +307,15 @@ Every endpoint listed in [API endpoints](#api-endpoints) responds in demo mode, 
 - `/api/compare` — runs both fake providers independently and returns the same comparison summary shape as production.
 - `/api/usage/history`, `/api/usage/summary`, `/api/advisor/recommend`, `/api/licensing/plans`, `/api/licensing/calculate` — unchanged; history is just in-memory instead of SQLite.
 
+### Deployment steps
+
+1. Push this repository to GitHub (already required for a Vercel import).
+2. In the Vercel dashboard: **Add New → Project**, select this repository.
+3. Set **Root Directory** to `copilot-usage-dashboard` (the app lives in this subdirectory, not the repo root).
+4. Leave the framework preset as "Other" — `vercel.json` already declares `buildCommand: npm run build` and `outputDirectory: dist`.
+5. No environment variables are required or used by demo mode.
+6. Deploy.
+
 ### Limitations of demo mode
 
 - **No real provider is exercised.** No actual Copilot or Claude usage, latency, model routing, or cost is measured — all numbers are fixed, synthetic values set in `server/demo/fake-providers.ts`.
@@ -386,7 +382,7 @@ This list mirrors the application's own **Reports & Backlog** section (`src/cont
 - Historizing optional quota snapshots using the existing migration mechanism.
 - A periodic check comparing plan prices against their source documents.
 - Frontend component tests (requires an additional dependency).
-- Verifying the Vercel demo deployment end to end against a live project, and capturing the pending screenshots listed in [Screenshots](#screenshots).
+- Verifying the Vercel demo deployment end to end against a live project.
 
 ## License
 
