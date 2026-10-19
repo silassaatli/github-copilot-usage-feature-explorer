@@ -120,6 +120,18 @@ Sunucu, proje kökündeki `.env` dosyasını başlangıçta (`dotenv`) okur. De�
 
 Sunucu `Ctrl+C` ile kapatılır. Geliştirme sunucusu `node --watch --import tsx` ile çalışır. `tsx watch`, Windows'ta `concurrently` altında Claude SDK yüklenirken sunucuyu kilitlediği için kullanılmıyor.
 
+## Vercel'de demo dağıtımı
+
+Uygulama yerel bir GitHub hesabı oturumu (Copilot) ve kalıcı dosya sistemi (SQLite) gerektirdiği için, Vercel'in sunucusuz ortamında **gerçek** Copilot/Claude çağrıları ve kalıcı geçmişle çalışamaz. Bunun yerine `vercel.json` + `api/[...slug].ts`, **sahte sağlayıcılarla** (`server/demo/`) çalışan bir vitrin modu yayınlar:
+
+- `server/demo/fake-providers.ts`: gerçek hesap/anahtar gerektirmeyen, örnek metrikler üreten sahte Copilot servisi ve Claude `queryFn`'i (testlerdeki sahte sağlayıcılarla aynı desen, bkz. `tests/api.test.ts`).
+- `server/demo/create-demo-app.ts`: bu sahte sağlayıcılarla `createApp`'i kurar, geçmişi bellekte tutar (kalıcı değildir) ve `trustedHosts: 'any'` ile yerel-host kısıtlamasını kaldırır — gerçek bir anahtar/hesap olmadığı için bunun bir güvenlik riski yoktur.
+- `api/[...slug].ts`: tüm `/api/*` isteklerini tek bir Vercel fonksiyonunda bu demo app'e yönlendirir.
+
+Dağıtım: Vercel projesini bu dizine (`copilot-usage-dashboard`) kök (root) olarak işaret edip "Deploy" demeniz yeterli; `vercel.json` build komutunu (`npm run build`) ve çıkış dizinini (`dist`) zaten tanımlar. Ortam değişkeni veya API anahtarı gerekmez. Demo modunda her yanıtın başında/olaylarında "Demo modu" ibaresi bulunur ve üretilen veriler gerçek bir model çalıştırmasını temsil etmez.
+
+Gerçek sağlayıcı çağrılarıyla bir cloud dağıtımı isterseniz mimarinin değişmesi gerekir (Copilot SDK'nın yerel oturum gereksinimi çözülemeyebilir; Claude için API anahtarı tabanlı ayrı bir backend; kalıcılık için harici bir veritabanı).
+
 ## Ücretsiz yerel testler
 
 | Komut | Kapsam |

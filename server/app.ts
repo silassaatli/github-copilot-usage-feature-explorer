@@ -42,6 +42,13 @@ export interface AppDependencies {
   claudeQueryFn?: RunClaudeOptions['queryFn']
   /** Verilirse derlenmiş ön yüz bu dizinden sunulur (production modu). */
   frontendDir?: string
+  /**
+   * 'localhost' (varsayılan): yalnızca yerel arayüzden erişime izin verir.
+   * 'any': Host/Origin denetimini atlar. Yalnızca sahte sağlayıcılarla çalışan
+   * halka açık demo dağıtımları (örn. Vercel) için kullanılır; gerçek Copilot/Claude
+   * anahtarlarıyla asla 'any' kullanılmamalıdır.
+   */
+  trustedHosts?: 'localhost' | 'any'
 }
 
 const promptLimit = 12_000
@@ -199,6 +206,10 @@ export function createApp(deps: AppDependencies) {
   // (DNS rebinding veya çapraz kaynak form gönderimiyle) kullanıcıdan habersiz
   // model çağrısı başlatmasını engeller.
   app.use('/api', (request, response, next) => {
+    if (deps.trustedHosts === 'any') {
+      next()
+      return
+    }
     const host = hostnameOf(request.headers.host, false)
     if (!host || !localHostnames.has(host)) {
       response.status(403).json({ error: 'Bu API yalnızca yerel makineden kullanılabilir.', code: 'FORBIDDEN_HOST' })
