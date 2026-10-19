@@ -41,8 +41,6 @@ The application's interface is in Turkish (it was built for a Turkish-speaking a
 
 This project is a demo/evaluation tool for teams deciding how to use GitHub Copilot, and for comparing it against the Claude Agent SDK on the same task. It runs entirely on your own machine (`127.0.0.1`), using your own GitHub Copilot login and, optionally, your own Anthropic API key. No request is sent anywhere when the page loads — every provider call only happens when you explicitly click a run button.
 
-A hero screenshot of the running application is intended to appear here. See [Screenshots](#screenshots) for current status.
-
 ## Problem statement and objectives
 
 Teams evaluating "should we use GitHub Copilot, and how" usually have to read vendor marketing pages, guess at token costs, and manually compare a second provider. This project exists to make that evaluation **empirical and local**:
@@ -68,11 +66,6 @@ It is **not** a production multi-tenant product, a billing dashboard, or a bench
 
 Every section and card in the UI carries an explicit label for its data type: *real measurement*, *estimate*, *example/assumption*, *rule-based*, or *informational*. The sidebar reads the real `/api/health` response every 30 seconds to show Copilot, Claude and database status.
 
-## Screenshots
-
-**Status: pending.** This repository does not yet contain screenshot files, and none have been added as part of this change — no browser automation tool was available in the environment that produced this documentation pass, and screenshots were intentionally not fabricated.
-
-The intended location and filenames are already reserved under [`docs/images/`](docs/images/):
 
 | File | Section it should capture |
 |---|---|
@@ -84,7 +77,7 @@ The intended location and filenames are already reserved under [`docs/images/`](
 | `docs/images/licensing-cost.png` | A license/cost calculation with its inputs and derived result |
 | `docs/images/feature-guide.png` | The feature guide cards (Chat, Agent Mode, Skills, Fleet, MCP, Hooks, …) |
 
-To add them: run the app locally (`npm run dev`), navigate to each section listed above, capture a screenshot with non-sensitive example data (no real API keys, account names, or billing details visible), save it under `docs/images/` using the filename above, and reference it in the relevant section below with standard Markdown image syntax, e.g. `![Playground](docs/images/playground.png)`.
+To add them: run the app locally (`npm run dev`), navigate to each section listed above, capture a screenshot with non-sensitive example data (no real API keys, account names, or billing details visible)
 
 ## Application sections explained
 
@@ -202,7 +195,6 @@ No new runtime dependency was introduced by this documentation/deployment pass; 
 
 - **Node.js `>=22.13.0`** (required for the built-in `node:sqlite` module; Node 24 recommended) and npm.
 - **GitHub Copilot access:** the Copilot SDK uses the GitHub account logged in on your machine (`useLoggedInUser: true`). You need to be logged in via the Copilot CLI. If Copilot is unavailable, the app still starts and reports its state; Copilot endpoints degrade gracefully.
-- **Claude (optional):** an Anthropic Console API key with credit/billing configured on the Console account (see [How Claude integration works](#how-claude-integration-works)).
 
 ### Setup
 
@@ -327,15 +319,6 @@ Every endpoint listed in [API endpoints](#api-endpoints) responds in demo mode, 
 - `/api/claude/status`, `/api/claude/models`, `/api/claude/chat` — served by the fake Claude `queryFn`.
 - `/api/compare` — runs both fake providers independently and returns the same comparison summary shape as production.
 - `/api/usage/history`, `/api/usage/summary`, `/api/advisor/recommend`, `/api/licensing/plans`, `/api/licensing/calculate` — unchanged; history is just in-memory instead of SQLite.
-
-### Deployment steps
-
-1. Push this repository to GitHub (already required for a Vercel import).
-2. In the Vercel dashboard: **Add New → Project**, select this repository.
-3. Set **Root Directory** to `copilot-usage-dashboard` (the app lives in this subdirectory, not the repo root).
-4. Leave the framework preset as "Other" — `vercel.json` already declares `buildCommand: npm run build` and `outputDirectory: dist`.
-5. No environment variables are required or used by demo mode.
-6. Deploy.
 
 ### Limitations of demo mode
 
